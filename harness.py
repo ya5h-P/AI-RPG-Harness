@@ -184,7 +184,7 @@ class StorySettings:
     repeat_penalty: float = 1.05
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
-    context_length: int = 98304
+    context_length: int = 16384
     enable_thinking: bool = False
     auto_summarize: bool = False
     memory_bank_enabled: bool = False
@@ -195,7 +195,7 @@ class StorySettings:
     def from_dict(cls, data: dict[str, Any] | None) -> StorySettings:
         if not data:
             return cls()
-        ctx_len = int(data.get("context_length", 98304))
+        ctx_len = int(data.get("context_length", 16384))
         ctx_len = max(1024, min(98304, ctx_len))
         return cls(
             temperature=float(data.get("temperature", 0.85)),
@@ -1207,7 +1207,7 @@ def build_context_plan(
     AI Dungeon's Required (70% max) vs Dynamic (Story Cards, Memory Bank, History)
     context priority rules.
     """
-    ctx_limit = max(1024, min(98304, int(story.settings.context_length or 98304)))
+    ctx_limit = max(1024, min(98304, int(story.settings.context_length or 16384)))
     req_cap = int(ctx_limit * 0.70)
 
     raw_instructions = story.ai_instructions.strip() or DEFAULT_AI_INSTRUCTIONS

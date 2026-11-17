@@ -736,7 +736,7 @@
     els.settingRepeatPenalty.value = s.settings?.repeat_penalty ?? 1.05;
     els.settingPresencePenalty.value = s.settings?.presence_penalty ?? 0;
     els.settingFrequencyPenalty.value = s.settings?.frequency_penalty ?? 0;
-    els.settingContextLength.value = s.settings?.context_length ?? 98304;
+    els.settingContextLength.value = s.settings?.context_length ?? 16384;
     els.settingAutoSummarize.checked = Boolean(s.settings?.auto_summarize);
     els.settingMemoryBank.checked = Boolean(s.settings?.memory_bank_enabled);
     els.settingRawOutput.checked = Boolean(s.settings?.raw_model_output);
@@ -2054,7 +2054,7 @@
 
   function renderContextBreakdown(data, modeLabel) {
     els.contextSectionsList.innerHTML = "";
-    const limit = Math.max(1, Number(data.context_limit || 98304));
+    const limit = Math.max(1, Number(data.context_limit || 16384));
     const reserved = Number(data.reserved_response_tokens || 0);
     const sections = data.sections || [];
     const sectionTokens = sections.map((sec) =>
@@ -3174,7 +3174,7 @@
         repeat_penalty: numInputVal(els.settingRepeatPenalty, 1.05),
         presence_penalty: numInputVal(els.settingPresencePenalty, 0),
         frequency_penalty: numInputVal(els.settingFrequencyPenalty, 0),
-        context_length: numInputVal(els.settingContextLength, 98304),
+        context_length: numInputVal(els.settingContextLength, 16384),
         auto_summarize: els.settingAutoSummarize.checked,
         memory_bank_enabled: els.settingMemoryBank.checked,
         raw_model_output: els.settingRawOutput.checked,
