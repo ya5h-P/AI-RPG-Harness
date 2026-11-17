@@ -3,8 +3,10 @@ __pycache__/
 node_modules/
 logs/
 stories/
-scenarios/
 scripts/
+scenarios/*
+!scenarios/tavern.json
+!scenarios/station.json
 settings.json
 metadata.json
 .server.pid
