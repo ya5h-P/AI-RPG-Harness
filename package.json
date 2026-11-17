@@ -1,0 +1,15 @@
+{
+  "name": "ai-rpg-harness",
+  "version": "1.0.0",
+  "description": "Local self-hosted AI Dungeon-style interactive roleplaying engine with desktop & mobile web UI",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "./start.sh",
+    "start:tailscale": "./start.sh --tailscale",
+    "test": "python3 -m unittest -v test_harness.py"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

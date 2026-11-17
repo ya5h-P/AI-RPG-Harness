@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>AI RPG Harness</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div id="llm-pill" class="llm-pill offline" title="Checking LLM..." aria-label="LLM status">
+            <span class="dot"></span>
+          </div>
+          <button id="btn-home" class="icon-btn" title="Home (Adventures & Scenarios)">
+            🏠<span class="btn-label-sm"> Home</span>
+          </button>
+          <span id="home-brand" class="home-brand">AI RPG Harness</span>
+          <input
+            id="story-title"
+            class="title-input hidden"
+            type="text"
+            value="Select a Scenario"
+            aria-label="Adventure title"
+          />
+        </div>
+
+        <div class="topbar-right">
+          <button id="btn-start-llm" class="secondary-btn hidden">
+            Start LLM
+          </button>
+          <button id="btn-endpoint" class="icon-btn" title="Switch LLM Endpoint or Model" aria-label="Model Endpoint">
+            🔌 <span id="endpoint-btn-label">Model</span>
+          </button>
+          <button type="button" id="btn-undo" class="icon-btn topbar-icon-btn hidden" title="Undo last change" aria-label="Undo">
+            ↶
+          </button>
+          <button type="button" id="btn-redo" class="icon-btn topbar-icon-btn hidden" title="Redo undone change" aria-label="Redo">
+            ↷
+          </button>
+          <button id="btn-context" class="icon-btn hidden" title="Inspect Prompt & Token Usage" aria-label="Context">
+            🔍<span class="btn-label-sm"> Context</span>
+          </button>
+          <button id="btn-settings" class="icon-btn hidden" title="Adventure &amp; AI Settings" aria-label="Settings">
+            ⚙<span class="btn-label-sm"> Settings</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <!-- Main Home Page: Adventures & Scenarios Tabs -->
+        <section id="home-view" class="home-view">
+          <div class="home-container">
+            <div class="home-toolbar">
+              <div class="home-tabs" role="tablist" aria-label="Main sections">
+                <button type="button" class="home-tab active" data-home-tab="adventures">
+                  Adventures
+                </button>
+                <button type="button" class="home-tab" data-home-tab="scenarios">
+                  Scenarios
+                </button>
+              </div>
+              <div class="home-actions">
+                <button type="button" id="btn-home-import-scenario" class="secondary-btn">
+                  📥 Import
+                </button>
+                <button type="button" id="btn-home-create-scenario" class="primary-btn">
+                  + Create Scenario
+                </button>
+              </div>
+            </div>
+
+            <div id="home-pane-adventures" class="home-pane">
+              <div id="home-adventures-grid" class="home-grid"></div>
+            </div>
+
+            <div id="home-pane-scenarios" class="home-pane hidden">
+              <div id="home-scenarios-grid" class="home-grid"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Center: Story Feed & Composer -->
+        <main id="stage-view" class="stage hidden">
+          <div id="story-feed" class="story-feed">
+            <div class="empty-state">Loading adventure...</div>
+          </div>
+
+          <div id="script-message-banner" class="script-message-banner hidden"></div>
+          <div id="error-banner" class="error-banner hidden"></div>
+
+          <section class="composer">
+            <div class="composer-top">
+              <div id="mode-switcher" class="mode-switcher" role="tablist" aria-label="Chat input mode">
+                <button
+                  type="button"
+                  id="btn-mode-collapse"
+                  class="mode-collapse-btn"
+                  title="Collapse input modes"
+                  aria-label="Collapse input modes"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  class="mode-btn active"
+                  data-mode="do"
+                  title="Character action (Alt+1)"
+                >
+                  <span class="mode-icon">⚡</span> Do
+                </button>
+                <button
+                  type="button"
+                  class="mode-btn"
+                  data-mode="say"
+                  title="Character dialogue (Alt+2)"
+                >
+                  <span class="mode-icon">💬</span> Say
+                </button>
+                <button
+                  type="button"
+                  class="mode-btn"
+                  data-mode="story"
+                  title="Inline story narration (Alt+3)"
+                >
+                  <span class="mode-icon">📖</span> Story
+                </button>
+                <button
+                  type="button"
+                  class="mode-btn"
+                  data-mode="guide"
+                  title="Out-of-character steering guidance for this turn (Alt+4)"
+                >
+                  <span class="mode-icon">🧭</span> Guide
+                </button>
+              </div>
+
+              <div class="quick-actions">
+                <div class="retry-group">
+                  <button type="button" id="btn-retry" class="ghost-btn" title="Regenerate last AI turn">
+                    ↻ Retry
+                  </button>
+                  <button type="button" id="btn-retry-changes" class="ghost-btn" title="Retry with changes">
+                    ✏️
+                  </button>
+                </div>
+                <button type="button" id="btn-continue" class="ghost-btn" title="Let AI continue without input">
+                  ▶ Continue
+                </button>
+                <button type="button" id="btn-erase" class="ghost-btn" title="Erase last action (undoable)">
+                  ⌫ Erase
+                </button>
+              </div>
+            </div>
+
+            <div id="retry-changes-bar" class="retry-changes-bar hidden">
+              <input
+                id="retry-changes-input"
+                type="text"
+                placeholder="Tell the AI what to change in the last response..."
+              />
+              <button type="button" id="btn-submit-retry-changes" class="primary-btn">Apply &amp; Retry</button>
+              <button type="button" id="btn-cancel-retry-changes" class="secondary-btn">Cancel</button>
+            </div>
+
+            <div class="input-row">
+              <textarea
+                id="player-input"
+                rows="2"
+                placeholder="What do you do? (e.g., pick up a bucket)"
+              ></textarea>
+              <div class="send-col">
+                <button type="button" id="btn-send" class="primary-btn">
+                  Send
+                </button>
+                <button
+                  type="button"
+                  id="btn-add-only"
+                  class="secondary-btn"
+                  title="Append to story without triggering AI yet"
+                >
+                  + Add
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <!-- Right Drawer: Adventure & AI Settings -->
+        <aside id="drawer-settings" class="drawer drawer-right hidden">
+          <div class="drawer-header">
+            <h2>Settings</h2>
+            <button id="btn-close-settings" class="close-btn" aria-label="Close">×</button>
+          </div>
+
+          <div class="drawer-tabs drawer-tabs-2 settings-main-tabs" role="tablist" aria-label="Settings sections">
+            <button type="button" class="drawer-tab active" data-settings-tab="adventure">Adventure</button>
+            <button type="button" class="drawer-tab" data-settings-tab="ai">AI Settings</button>
+          </div>
+
+          <div id="settings-pane-adventure" class="settings-section-pane">
+            <div class="drawer-tabs drawer-tabs-4">
+              <button type="button" class="drawer-tab active" data-drawer-tab="plot">Plot</button>
+              <button type="button" class="drawer-tab" data-drawer-tab="cards">Cards</button>
+              <button type="button" class="drawer-tab" data-drawer-tab="scripts">Scripts</button>
+              <button type="button" class="drawer-tab" data-drawer-tab="details">Details</button>
+            </div>
+
+            <div id="tab-pane-plot" class="drawer-tab-pane">
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div>
+                  <span class="plot-card-title">AI Instructions</span>
+                </div>
+                <button type="button" class="clear-card-btn" data-clear-target="story-ai-instructions" title="Clear">🗑</button>
+              </div>
+              <textarea
+                id="story-ai-instructions"
+                rows="5"
+                placeholder="Influence the AI's responses by providing instructions for the AI to follow."
+              ></textarea>
+              <div class="plot-card-foot">
+                <button type="button" id="btn-insert-default-story-instructions" class="chip-btn">
+                  + Insert Default
+                </button>
+              </div>
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <span class="plot-card-title">Story Summary</span>
+                <button type="button" class="clear-card-btn" data-clear-target="story-summary-input" title="Clear">🗑</button>
+              </div>
+              <textarea
+                id="story-summary-input"
+                rows="4"
+                placeholder="A summary of the adventure. The AI will always use this when generating new responses."
+              ></textarea>
+              <div class="plot-card-foot">
+                <button type="button" id="btn-auto-summarize" class="chip-btn">
+                  ✨ Auto-Summarize
+                </button>
+              </div>
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <span class="plot-card-title">Plot Essentials</span>
+                <button type="button" class="clear-card-btn" data-clear-target="plot-essentials-input" title="Clear">🗑</button>
+              </div>
+              <textarea
+                id="plot-essentials-input"
+                rows="4"
+                placeholder="Enter important information about the adventure. The AI will always use this when generating new responses."
+              ></textarea>
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <span class="plot-card-title">Author's Note</span>
+                <button type="button" class="clear-card-btn" data-clear-target="authors-note-input" title="Clear">🗑</button>
+              </div>
+              <textarea
+                id="authors-note-input"
+                rows="3"
+                placeholder='Influence the AI&#39;s writing style with directions.&#10;&#10;Ex. "Use a very descriptive writing style in 17th century language"'
+              ></textarea>
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div>
+                  <span class="plot-card-title">Third Person</span>
+                  <span class="plot-card-sub">"Say/do" in third person</span>
+                </div>
+                <label class="toggle-switch" title="Toggle third-person mode">
+                  <input id="story-third-person" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div id="story-third-person-fields" class="third-person-fields hidden">
+                <input
+                  id="story-character-name"
+                  type="text"
+                  placeholder="Character name (e.g., Kael)"
+                />
+              </div>
+              <div id="story-third-person-status" class="third-person-status">
+                Third-person input off.
+              </div>
+            </div>
+          </div>
+
+          <div id="tab-pane-cards" class="drawer-tab-pane hidden">
+            <p class="cards-help">
+              Triggered when keywords appear in recent turns. Note: the AI sees only the Entry text (mention the card's name inside Entry).
+            </p>
+            <div class="cards-filter-row">
+              <input id="story-cards-search" type="text" placeholder="Search cards..." />
+              <select id="story-cards-type-filter">
+                <option value="">All Types</option>
+                <option value="Character">Character</option>
+                <option value="Location">Location</option>
+                <option value="Faction">Faction</option>
+                <option value="Item">Item</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </div>
+            <div class="cards-io-row">
+              <button type="button" id="btn-add-story-card" class="secondary-btn" style="flex: 1;">
+                + Add Card
+              </button>
+              <button type="button" id="btn-import-cards" class="secondary-btn" title="Import Story Cards JSON array (replaces current cards)">
+                Import
+              </button>
+              <button type="button" id="btn-export-cards" class="secondary-btn" title="Export Story Cards as JSON">
+                Export
+              </button>
+              <input id="import-cards-file-input" type="file" accept=".json,application/json" class="hidden" />
+            </div>
+            <div id="story-cards-list" class="story-cards-list"></div>
+          </div>
+
+          <div id="tab-pane-scripts" class="drawer-tab-pane hidden">
+            <p class="cards-help">
+              Scripts run in order from top to bottom on Input, Context, and Output hooks. Up to 10 attached Scripts per Adventure.
+            </p>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div>
+                  <span class="plot-card-title">Built-in Script</span>
+                  <span id="story-builtin-status" class="plot-card-sub">Empty</span>
+                </div>
+                <label class="toggle-switch" title="Enable/Disable Built-in Script">
+                  <input id="story-builtin-enabled" type="checkbox" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="plot-card-foot">
+                <button type="button" id="btn-edit-story-builtin-script" class="chip-btn">
+                  Edit Code &amp; Test
+                </button>
+              </div>
+            </div>
+
+            <div class="script-attach-row">
+              <select id="story-attach-script-select"></select>
+              <button type="button" id="btn-attach-story-script" class="secondary-btn">
+                + Add Script
+              </button>
+            </div>
+
+            <button type="button" id="btn-new-reusable-script" class="secondary-btn full-width">
+              + Create New Reusable Script
+            </button>
+
+            <div id="story-attached-scripts-list" class="attached-scripts-list"></div>
+
+            <details class="model-settings-details">
+              <summary class="field-label">Script Console Log</summary>
+              <div id="story-script-logs" class="script-logs-box">(No logs yet)</div>
+              <button type="button" id="btn-clear-story-logs" class="ghost-btn" style="margin-top: 6px;">
+                Clear Console
+              </button>
+            </details>
+          </div>
+
+          <div id="tab-pane-details" class="drawer-tab-pane hidden">
+            <div class="form-field">
+              <label class="field-label" for="story-details-title">Adventure Title</label>
+              <input id="story-details-title" type="text" placeholder="Adventure title..." />
+            </div>
+            <div class="form-field">
+              <label class="field-label" for="story-details-desc">Description (Player-facing)</label>
+              <textarea id="story-details-desc" rows="4" placeholder="Notes or adventure description (not sent to AI)..."></textarea>
+            </div>
+            <div class="form-field">
+              <label class="field-label" for="story-details-tags">Tags (comma-separated)</label>
+              <input id="story-details-tags" type="text" placeholder="e.g., fantasy, mystery" />
+            </div>
+            <button type="button" id="btn-download-adventure" class="secondary-btn full-width">
+              📦 Download Adventure (.zip)
+            </button>
+          </div>
+          </div>
+
+          <div id="settings-pane-ai" class="settings-section-pane hidden">
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div>
+                  <span class="plot-card-title">Model Settings</span>
+                  <span class="plot-card-sub">Context window &amp; sampling</span>
+                </div>
+              </div>
+              <div class="drawer-section settings-grid">
+                <div>
+                  <label class="field-label" for="setting-context-length">Context Length</label>
+                  <input id="setting-context-length" type="number" step="1024" min="1024" max="98304" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-max-tokens">Response Length</label>
+                  <input id="setting-max-tokens" type="number" step="32" min="32" max="4096" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-temp">Temperature</label>
+                  <input id="setting-temp" type="number" step="0.05" min="0" max="2" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-top-p">Top P</label>
+                  <input id="setting-top-p" type="number" step="0.05" min="0" max="1" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-top-k">Top K</label>
+                  <input id="setting-top-k" type="number" step="1" min="0" max="200" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-repeat-penalty">Repetition Penalty</label>
+                  <input id="setting-repeat-penalty" type="number" step="0.02" min="0.8" max="2" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-presence-penalty">Presence Penalty</label>
+                  <input id="setting-presence-penalty" type="number" step="0.05" min="-2" max="2" />
+                </div>
+                <div>
+                  <label class="field-label" for="setting-frequency-penalty">Frequency Penalty</label>
+                  <input id="setting-frequency-penalty" type="number" step="0.05" min="-2" max="2" />
+                </div>
+              </div>
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div>
+                  <span class="plot-card-title">Memory &amp; Output</span>
+                  <span class="plot-card-sub">Automatic memory &amp; behavior</span>
+                </div>
+              </div>
+              <div class="drawer-section" style="gap: 10px;">
+                <label class="checkbox-row">
+                  <input id="setting-auto-summarize" type="checkbox" />
+                  <span>Auto Summarization (every 15 actions)</span>
+                </label>
+                <label class="checkbox-row">
+                  <input id="setting-memory-bank" type="checkbox" />
+                  <span>Memory Bank (every 6 actions)</span>
+                </label>
+                <label class="checkbox-row">
+                  <input id="setting-raw-output" type="checkbox" />
+                  <span>Raw Model Output (skip incomplete/repeat trim)</span>
+                </label>
+                <label class="checkbox-row">
+                  <input id="setting-follow-latest" type="checkbox" checked />
+                  <span>Follow latest text (auto-scroll while streaming)</span>
+                </label>
+                <label class="checkbox-row">
+                  <input id="setting-thinking" type="checkbox" />
+                  <span>Enable Gemma Thinking Mode</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-section">
+            <button id="btn-save-settings" class="primary-btn full-width">
+              Save Settings
+            </button>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Scenario Selection & Creation Modal -->
+    <div id="scenario-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="scenario-modal-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h2 id="scenario-modal-title">Scenarios</h2>
+            <p class="modal-subtitle">Select a scenario to play, or create your own with a name and fixed opening message.</p>
+          </div>
+          <button id="btn-close-scenarios" class="close-btn" aria-label="Close">×</button>
+        </div>
+
+        <div class="modal-body">
+          <section class="scenario-list-pane">
+            <div class="pane-head" style="display: flex; justify-content: space-between; align-items: center;">
+              <label class="field-label">Available Scenarios</label>
+              <button type="button" id="btn-open-import" class="chip-btn">
+                📥 Import URL / JSON
+              </button>
+            </div>
+            <div id="scenarios-grid" class="scenarios-grid"></div>
+          </section>
+
+          <section class="scenario-form-pane">
+            <div class="pane-head">
+              <label id="scenario-form-heading" class="field-label">Create Scenario</label>
+            </div>
+
+            <div class="form-field">
+              <label class="field-label" for="scenario-name-input">Name</label>
+              <input id="scenario-name-input" type="text" placeholder="e.g., The Rusty Lantern" />
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div class="opening-head-left">
+                  <span class="plot-card-title">OPENING:</span>
+                  <select id="scenario-type-select" class="inline-type-select" title="Scenario Type">
+                    <option value="story">Story</option>
+                    <option value="multiple_choice">Multiple Choice</option>
+                    <option value="character_creator">Character Creator</option>
+                  </select>
+                </div>
+                <span id="scenario-opening-count" class="char-counter">0 / 4000</span>
+              </div>
+              <div id="scenario-opening-wrap">
+                <textarea
+                  id="scenario-opening-input"
+                  rows="6"
+                  maxlength="4000"
+                  placeholder="How does your story begin? Example: You are ${character.name}, a knight from ${enter a country...}"
+                ></textarea>
+              </div>
+              <div id="scenario-choices-wrap" class="scenario-choices-wrap hidden">
+                <div id="scenario-choices-list" class="scenario-choices-list"></div>
+                <button type="button" id="btn-add-scenario-choice" class="secondary-btn full-width">
+                  + Add Choice
+                </button>
+              </div>
+              <div id="scenario-cc-note" class="cards-help hidden">
+                Character Creator has no fixed opening. Players will choose from this scenario's Story Cards (add them below) to generate their starting scene.
+              </div>
+            </div>
+
+            <div class="plot-card">
+              <div class="plot-card-head">
+                <div>
+                  <span class="plot-card-title">AI Instructions</span>
+                </div>
+                <button type="button" class="clear-card-btn" data-clear-target="scenario-ai-instructions" title="Clear">🗑</button>
+              </div>
+              <textarea
+                id="scenario-ai-instructions"
+                rows="4"
+                placeholder="Influence the AI's responses by providing instructions for the AI to follow."
+              ></textarea>
+              <div class="plot-card-foot">
+                <button type="button" id="btn-insert-default-scenario-instructions" class="chip-btn">
+                  + Insert Default
+                </button>
+              </div>
+            </div>
+
+            <details class="scenario-plot-details">
+              <summary class="field-label">Plot Components &amp; Perspective (Optional)</summary>
+              <div class="scenario-plot-stack">
+                <div class="plot-card">
+                  <div class="plot-card-head">
+                    <span class="plot-card-title">Story Summary</span>
+                    <button type="button" class="clear-card-btn" data-clear-target="scenario-story-summary" title="Clear">🗑</button>
+                  </div>
+                  <textarea
+                    id="scenario-story-summary"
+                    rows="3"
+                    placeholder="A summary of the adventure. The AI will always use this when generating new responses."
+                  ></textarea>
+                </div>
+
+                <div class="plot-card">
+                  <div class="plot-card-head">
+                    <span class="plot-card-title">Plot Essentials</span>
+                    <button type="button" class="clear-card-btn" data-clear-target="scenario-plot-essentials" title="Clear">🗑</button>
+                  </div>
+                  <textarea
+                    id="scenario-plot-essentials"
+                    rows="3"
+                    placeholder="Enter important information about the adventure. The AI will always use this when generating new responses."
+                  ></textarea>
+                </div>
+
+                <div class="plot-card">
+                  <div class="plot-card-head">
+                    <span class="plot-card-title">Author's Note</span>
+                    <button type="button" class="clear-card-btn" data-clear-target="scenario-authors-note" title="Clear">🗑</button>
+                  </div>
+                  <textarea
+                    id="scenario-authors-note"
+                    rows="2"
+                    placeholder='Influence the AI&#39;s writing style with directions. Ex. "Use a very descriptive writing style in 17th century language"'
+                  ></textarea>
+                </div>
+
+                <div class="plot-card">
+                  <div class="plot-card-head">
+                    <div>
+                      <span class="plot-card-title">Third Person</span>
+                      <span class="plot-card-sub">"Say/do" in third person</span>
+                    </div>
+                    <label class="toggle-switch">
+                      <input id="scenario-third-person" type="checkbox" />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                  <div id="scenario-third-person-fields" class="third-person-fields hidden">
+                    <input
+                      id="scenario-character-name"
+                      type="text"
+                      placeholder="Character name (e.g., Kael)"
+                    />
+                  </div>
+                </div>
+
+                <div class="plot-card">
+                  <div class="plot-card-head">
+                    <span class="plot-card-title">Scenario Story Cards</span>
+                    <button type="button" id="btn-add-scenario-card" class="chip-btn">
+                      + Add Card
+                    </button>
+                  </div>
+                  <div id="scenario-cards-list" class="story-cards-list"></div>
+                </div>
+
+                <div class="plot-card">
+                  <div class="plot-card-head">
+                    <div>
+                      <span class="plot-card-title">Scripting</span>
+                      <span id="scenario-script-status" class="plot-card-sub">Empty</span>
+                    </div>
+                    <button type="button" id="btn-edit-scenario-script" class="chip-btn">
+                      Open Scripting
+                    </button>
+                  </div>
+                  <div class="script-attach-row">
+                    <select id="scenario-attach-script-select"></select>
+                    <button type="button" id="btn-attach-scenario-script" class="secondary-btn">
+                      + Add
+                    </button>
+                  </div>
+                  <div id="scenario-attached-scripts-list" class="attached-scripts-list"></div>
+                </div>
+              </div>
+            </details>
+
+            <div id="scenario-form-error" class="form-error hidden"></div>
+
+            <div class="scenario-form-actions">
+              <button id="btn-cancel-edit-scenario" type="button" class="secondary-btn hidden">
+                Cancel
+              </button>
+              <button id="btn-save-scenario" type="button" class="secondary-btn">
+                Save Scenario
+              </button>
+              <button id="btn-save-play-scenario" type="button" class="primary-btn">
+                Save &amp; Play
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Context Viewer Modal -->
+    <div id="context-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="context-modal-title">
+      <div class="modal-card context-modal-card">
+        <div class="modal-header">
+          <div>
+            <h2 id="context-modal-title">Context Viewer</h2>
+            <p id="context-total-summary" class="modal-subtitle">Inspecting prompt tokens...</p>
+          </div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button type="button" id="btn-context-next" class="chip-btn active">Next Turn</button>
+            <button type="button" id="btn-context-last" class="chip-btn">Last Generation</button>
+            <button id="btn-close-context" class="close-btn" aria-label="Close">×</button>
+          </div>
+        </div>
+        <div id="context-sections-list" class="context-sections-list"></div>
+      </div>
+    </div>
+
+    <!-- Pre-Play Setup Modal (Multiple Choice / Character Creator / Placeholders) -->
+    <div id="play-setup-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="play-setup-title">
+      <div class="modal-card context-modal-card">
+        <div class="modal-header">
+          <div>
+            <h2 id="play-setup-title">Start Adventure</h2>
+            <p id="play-setup-subtitle" class="modal-subtitle"></p>
+          </div>
+          <button id="btn-close-play-setup" class="close-btn" aria-label="Close">×</button>
+        </div>
+        <div id="play-setup-body" class="play-setup-body"></div>
+        <div class="play-setup-footer">
+          <button id="btn-cancel-play-setup" type="button" class="secondary-btn">Cancel</button>
+          <button id="btn-back-play-setup" type="button" class="secondary-btn hidden">← Back</button>
+          <button id="btn-next-play-setup" type="button" class="primary-btn hidden">Next →</button>
+          <button id="btn-confirm-play-setup" type="button" class="primary-btn">Start Adventure</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scripting Editor & Test Modal -->
+    <div id="script-editor-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="script-editor-title">
+      <div class="modal-card script-editor-card">
+        <div class="modal-header">
+          <div>
+            <h2 id="script-editor-title">Scripting Editor</h2>
+            <p id="script-editor-subtitle" class="modal-subtitle">
+              Write JS modifiers using const modifier = (text) =&gt; { ... return { text }; }; modifier(text)
+            </p>
+          </div>
+          <button id="btn-close-script-editor" class="close-btn" aria-label="Close">×</button>
+        </div>
+
+        <div class="script-editor-body">
+          <div id="script-meta-fields" class="script-meta-fields hidden">
+            <div class="story-card-editor-row">
+              <input id="script-meta-name" type="text" placeholder="Script name..." />
+              <input id="script-meta-version" type="text" placeholder="v1.0" style="max-width: 90px;" />
+            </div>
+            <input id="script-meta-desc" type="text" placeholder="Description (what it does, commands, setup)..." />
+          </div>
+
+          <div class="script-hook-tabs">
+            <button type="button" class="script-hook-tab active" data-hook-tab="input">Input Modifier</button>
+            <button type="button" class="script-hook-tab" data-hook-tab="context">Context Modifier</button>
+            <button type="button" class="script-hook-tab" data-hook-tab="output">Output Modifier</button>
+            <button type="button" class="script-hook-tab" data-hook-tab="library">Library</button>
+          </div>
+
+          <textarea
+            id="script-code-editor"
+            class="script-code-editor"
+            rows="12"
+            spellcheck="false"
+            placeholder="const modifier = (text) => {&#10;  return { text };&#10;};&#10;&#10;modifier(text);"
+          ></textarea>
+
+          <div class="script-test-panel">
+            <div class="script-test-row">
+              <select id="script-test-hook">
+                <option value="input">Test Input</option>
+                <option value="context">Test Context</option>
+                <option value="output">Test Output</option>
+              </select>
+              <input id="script-test-input" type="text" placeholder="Test text (e.g., You grab a sword.)" />
+              <button type="button" id="btn-run-script-test" class="secondary-btn">Run Test</button>
+            </div>
+            <pre id="script-test-output" class="script-test-output hidden"></pre>
+          </div>
+        </div>
+
+        <div class="play-setup-footer">
+          <button id="btn-cancel-script-editor" type="button" class="secondary-btn">Cancel</button>
+          <button id="btn-save-script-editor" type="button" class="primary-btn">Save Script</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Import Scenario Modal -->
+    <div id="import-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
+      <div class="modal-card context-modal-card">
+        <div class="modal-header">
+          <div>
+            <h2 id="import-modal-title">Import AI Dungeon Scenario</h2>
+            <p class="modal-subtitle">
+              Import directly from a play.aidungeon.com Scenario URL (via Playwright), or upload/paste an exported JSON file (metadata.json).
+            </p>
+          </div>
+          <button id="btn-close-import" class="close-btn" aria-label="Close">×</button>
+        </div>
+        <div class="play-setup-body">
+          <div class="import-url-section">
+            <label class="field-label" for="import-url-input">Import from AI Dungeon URL</label>
+            <div class="import-url-row">
+              <input
+                id="import-url-input"
+                type="url"
+                placeholder="https://play.aidungeon.com/scenario/fwf0qGKI97le/..."
+              />
+              <button id="btn-import-url" type="button" class="primary-btn">Fetch &amp; Import</button>
+            </div>
+          </div>
+
+          <div class="import-divider"><span>OR Upload / Paste JSON</span></div>
+
+          <input id="import-file-input" type="file" accept=".json,application/json" />
+          <textarea
+            id="import-json-input"
+            class="script-code-editor"
+            rows="9"
+            placeholder='Paste JSON here (e.g., {"adventure": {...}, "state": {...}})'
+          ></textarea>
+          <div id="import-error" class="form-error hidden"></div>
+        </div>
+        <div class="play-setup-footer">
+          <button id="btn-cancel-import" type="button" class="secondary-btn">Cancel</button>
+          <button id="btn-confirm-import" type="button" class="primary-btn">Import JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model & Endpoint Switcher Modal -->
+    <div id="endpoint-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="endpoint-modal-title">
+      <div class="modal-card context-modal-card">
+        <div class="modal-header">
+          <div>
+            <h2 id="endpoint-modal-title">Endpoint &amp; Model</h2>
+            <p class="modal-subtitle">
+              Switch between local servers (llama.cpp, Ollama, LM Studio) or remote OpenAI-compatible APIs.
+            </p>
+          </div>
+          <button id="btn-close-endpoint" class="close-btn" aria-label="Close">×</button>
+        </div>
+        <div class="play-setup-body">
+          <div class="form-field">
+            <label class="field-label" for="ep-url-input">Base URI</label>
+            <input id="ep-url-input" type="url" placeholder="http://127.0.0.1:8080" />
+          </div>
+
+          <div class="form-field">
+            <label class="field-label" for="ep-key-input">API Key</label>
+            <div class="import-url-row">
+              <input id="ep-key-input" type="password" placeholder="Optional (leave blank for local servers)" autocomplete="off" />
+              <button id="btn-ep-clear-key" type="button" class="ghost-btn hidden" title="Clear saved API key">Clear</button>
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label class="field-label" for="ep-model-input">Model Name</label>
+            <div class="import-url-row">
+              <input id="ep-model-input" type="text" list="ep-models-datalist" placeholder="Auto-selected if 1 model is offered" />
+              <button id="btn-ep-refresh-models" type="button" class="secondary-btn" title="Fetch available models from /v1/models">↻ Fetch</button>
+            </div>
+            <select id="ep-model-select" class="hidden" aria-label="Choose offered model"></select>
+            <datalist id="ep-models-datalist"></datalist>
+          </div>
+
+          <div id="ep-status-msg" class="context-warning-banner hidden"></div>
+        </div>
+        <div class="play-setup-footer">
+          <button id="btn-cancel-endpoint" type="button" class="secondary-btn">Cancel</button>
+          <button id="btn-save-endpoint" type="button" class="primary-btn">Save &amp; Connect</button>
+        </div>
+      </div>
+    </div>
+
+    <datalist id="card-type-options">
+      <option value="Race"></option>
+      <option value="Class"></option>
+      <option value="Faction"></option>
+      <option value="Location"></option>
+      <option value="Character"></option>
+      <option value="Item"></option>
+      <option value="Element"></option>
+      <option value="Tradition"></option>
+      <option value="Custom"></option>
+    </datalist>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

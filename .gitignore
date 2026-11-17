@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+node_modules/
+logs/
+stories/
+scenarios/
+scripts/
+settings.json
+metadata.json
+.server.pid
+.playwright-mcp/
+.DS_Store
