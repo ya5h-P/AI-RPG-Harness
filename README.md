@@ -7,6 +7,14 @@ A local, self-hosted interactive fiction & AI RPG web application modeled after 
 
 ---
 
+## Screenshots
+
+| Home (`Scenarios`) | Desktop Gameplay | Mobile Gameplay |
+|---|---|---|
+| ![Home Scenarios](docs/screenshots/home.png) | ![Desktop Gameplay](docs/screenshots/gameplay-desktop.png) | ![Mobile Gameplay](docs/screenshots/gameplay-mobile.png) |
+
+---
+
 ## Features
 
 - **Home Hub (`Adventures` & `Scenarios`)**: Clean 2-tab start page to resume adventures or browse, play, create, edit, and import scenarios.
