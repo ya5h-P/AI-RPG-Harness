@@ -108,6 +108,8 @@
     storyAttachScriptSelect: document.getElementById("story-attach-script-select"),
     btnAttachStoryScript: document.getElementById("btn-attach-story-script"),
     btnNewReusableScript: document.getElementById("btn-new-reusable-script"),
+    btnInstallInnerSelf: document.getElementById("btn-install-inner-self"),
+    btnInstallAutoCards: document.getElementById("btn-install-auto-cards"),
     storyAttachedScriptsList: document.getElementById("story-attached-scripts-list"),
     storyScriptLogs: document.getElementById("story-script-logs"),
     btnClearStoryLogs: document.getElementById("btn-clear-story-logs"),
@@ -155,6 +157,8 @@
     playSetupTitle: document.getElementById("play-setup-title"),
     playSetupSubtitle: document.getElementById("play-setup-subtitle"),
     playSetupBody: document.getElementById("play-setup-body"),
+    btnSetupInnerSelf: document.getElementById("btn-setup-inner-self"),
+    btnSetupAutoCards: document.getElementById("btn-setup-auto-cards"),
     btnClosePlaySetup: document.getElementById("btn-close-play-setup"),
     btnCancelPlaySetup: document.getElementById("btn-cancel-play-setup"),
     btnBackPlaySetup: document.getElementById("btn-back-play-setup"),
@@ -195,6 +199,8 @@
     modeSwitcher: document.getElementById("mode-switcher"),
     btnModeCollapse: document.getElementById("btn-mode-collapse"),
     modeBtns: Array.from(document.querySelectorAll(".mode-btn")),
+    segmentActionBar: document.getElementById("segment-action-bar"),
+    composer: document.querySelector(".composer"),
     playerInput: document.getElementById("player-input"),
     btnSend: document.getElementById("btn-send"),
     btnAddOnly: document.getElementById("btn-add-only"),
@@ -257,7 +263,9 @@
     state.mode = mode;
     updateModeUI();
     setModeExpanded(false);
-    els.playerInput.focus();
+    if (document.activeElement !== els.playerInput) {
+      els.playerInput.focus({ preventScroll: true });
+    }
   }
 
   function updateControlsState() {
@@ -286,6 +294,87 @@
     if (force || state.currentStory?.settings?.follow_latest_text !== false) {
       els.storyFeed.scrollTop = els.storyFeed.scrollHeight;
     }
+  }
+
+  function getStreamingScrollTop(anchorEl) {
+    const feed = els.storyFeed;
+    const maxFeedScroll = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    if (!anchorEl || !anchorEl.isConnected) return maxFeedScroll;
+    const feedRect = feed.getBoundingClientRect();
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const prevEl = anchorEl.previousElementSibling;
+    let topMargin = 14;
+    if (prevEl) {
+      const prevRect = prevEl.getBoundingClientRect();
+      const cs = getComputedStyle(prevEl);
+      const lineHeight = parseFloat(cs.lineHeight) || 27;
+      const padBottom = parseFloat(cs.paddingBottom) || 4;
+      const gap = Math.max(0, anchorRect.top - prevRect.bottom);
+      // Leave the last ~1 line of the preceding/user message visible at the top of the feed.
+      const keepEndHeight = Math.min(prevRect.height, lineHeight + padBottom + 6);
+      topMargin = keepEndHeight + gap;
+    } else if (anchorEl.classList.contains("stream-continuation")) {
+      const cs = getComputedStyle(anchorEl);
+      const lineHeight = parseFloat(cs.lineHeight) || 29;
+      // Leave ~1 line of the existing AI prose visible above the continuation point.
+      topMargin = lineHeight + 10;
+    }
+    const topLimit = Math.max(0, feed.scrollTop + (anchorRect.top - feedRect.top) - topMargin);
+    return Math.min(maxFeedScroll, topLimit);
+  }
+
+  function hasIncompleteTail(text) {
+    const prev = String(text || "").trimEnd();
+    if (!prev) return false;
+    if (prev.endsWith("...") || prev.endsWith("…")) return true;
+    const lastPara = prev.split("\n").pop() || "";
+    const dblCount = (lastPara.match(/"/g) || []).length;
+    if (dblCount % 2 === 1) return true;
+    const openCurly = (lastPara.match(/\u201c/g) || []).length;
+    const closeCurly = (lastPara.match(/\u201d/g) || []).length;
+    if (openCurly > closeCurly) return true;
+    const last = prev[prev.length - 1];
+    if ("—–-,;:(".includes(last)) return true;
+    const endedSentence =
+      ".!?".includes(last) ||
+      (prev.length >= 2 && "\"\u201d'\u2019)".includes(last) && ".!?".includes(prev[prev.length - 2]));
+    return !endedSentence;
+  }
+
+  function continuationSeparator(prevText, firstToken) {
+    const prev = String(prevText || "").trimEnd();
+    const add = String(firstToken || "").trimStart();
+    if (!prev || !add) return "";
+    if (',.;:!?")\u201d\u2019]'.includes(add[0])) return "";
+    if ("—–-\u201c".includes(prev[prev.length - 1])) return "";
+    if (hasIncompleteTail(prev) || /^[a-z]/.test(add)) return " ";
+    return "\n\n";
+  }
+
+  function segmentJoinSeparator(prevSeg, nextSeg) {
+    if (!prevSeg || !nextSeg) return "";
+    const prevText = String(prevSeg.text || "").trimEnd();
+    const nextText = String(nextSeg.text || "").trimStart();
+    if (!prevText || !nextText) return "";
+    if (nextSeg.kind === "do" || nextSeg.kind === "say") {
+      return "\n\n";
+    }
+    if (prevSeg.kind === "say" && nextSeg.kind === "ai") {
+      if (nextText.startsWith('"') || nextText.startsWith("\u201c")) {
+        return "\n\n";
+      }
+      return " ";
+    }
+    if (prevSeg.kind === "do" && (nextSeg.kind === "ai" || nextSeg.kind === "story")) {
+      return ',.;:!?")\u201d\u2019]'.includes(nextText[0]) ? "" : " ";
+    }
+    if (prevSeg.kind === "story" && (nextSeg.kind === "ai" || nextSeg.kind === "story")) {
+      if (!prevText.includes("\n")) {
+        return ',.;:!?")\u201d\u2019]'.includes(nextText[0]) ? "" : " ";
+      }
+      return continuationSeparator(prevText, nextText);
+    }
+    return continuationSeparator(prevText, nextText);
   }
 
   function updateStoryThirdPersonUI() {
@@ -325,7 +414,8 @@
       return (
         (c.title || "").toLowerCase().includes(q) ||
         (c.keys || "").toLowerCase().includes(q) ||
-        (c.entry || "").toLowerCase().includes(q)
+        (c.entry || "").toLowerCase().includes(q) ||
+        (c.description || "").toLowerCase().includes(q)
       );
     });
 
@@ -456,15 +546,18 @@
         genRow.appendChild(genBtn);
         box.appendChild(genRow);
       }
-      if (showCcFields) {
-        const descInput = document.createElement("textarea");
-        descInput.rows = 2;
-        descInput.placeholder = "Notes / Description (shown to players during Character Creation; AI doesn't see this)";
-        descInput.value = card.description || "";
-        descInput.oninput = () => {
-          card.description = descInput.value;
-        };
+      const descInput = document.createElement("textarea");
+      descInput.rows = 2;
+      descInput.placeholder = showCcFields
+        ? "Notes / Description (shown to players during Character Creation; AI doesn't see this)"
+        : "Notes / Description (player/script notes; AI doesn't see this)";
+      descInput.value = card.description || "";
+      descInput.oninput = () => {
+        card.description = descInput.value;
+      };
+      box.append(descInput);
 
+      if (showCcFields) {
         const ccLabel = document.createElement("label");
         ccLabel.className = "checkbox-row";
         ccLabel.style.fontSize = "0.78rem";
@@ -477,7 +570,7 @@
         const ccTxt = document.createElement("span");
         ccTxt.textContent = "Selectable in Character Creator";
         ccLabel.append(ccCb, ccTxt);
-        box.append(descInput, ccLabel);
+        box.append(ccLabel);
       }
       container.appendChild(box);
     });
@@ -758,6 +851,146 @@
     refreshStoriesList();
   }
 
+  function renderSegmentActionBar() {
+    const bar = els.segmentActionBar;
+    if (!bar) return;
+    const segs = state.currentStory?.segments || [];
+    const seg = segs.find((s) => s.id === state.activeToolbarSegmentId);
+    if (!seg || state.isGenerating || state.editingSegmentId) {
+      bar.innerHTML = "";
+      bar.classList.add("hidden");
+      return;
+    }
+
+    bar.innerHTML = "";
+    const badge = document.createElement("span");
+    badge.className = "seg-badge";
+    badge.textContent = seg.kind === "opening" ? "opening (fixed)" : seg.kind;
+    bar.appendChild(badge);
+
+    if (seg.kind !== "opening") {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "seg-action-btn";
+      editBtn.textContent = "Edit";
+      editBtn.onclick = () => {
+        state.activeToolbarSegmentId = null;
+        state.editingSegmentId = seg.id;
+        renderStoryFeed();
+      };
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "seg-action-btn del";
+      delBtn.textContent = "Delete";
+      delBtn.onclick = async () => {
+        state.activeToolbarSegmentId = null;
+        await deleteSegment(seg.id);
+      };
+
+      const eraseBtn = document.createElement("button");
+      eraseBtn.type = "button";
+      eraseBtn.className = "seg-action-btn del";
+      eraseBtn.title = "Erase this and all following segments (/eth)";
+      eraseBtn.textContent = "Erase to Here";
+      eraseBtn.onclick = async () => {
+        state.activeToolbarSegmentId = null;
+        const res = await api(
+          `/api/stories/${encodeURIComponent(state.currentStory.id)}/erase-to-here`,
+          { method: "POST", body: JSON.stringify({ seg_id: seg.id }) }
+        );
+        state.currentStory = res.story;
+        renderStoryFeed();
+        refreshStoriesList();
+      };
+
+      bar.append(editBtn, delBtn, eraseBtn);
+
+      if (seg.kind === "ai" && state.currentStory?.last_generation_context) {
+        const ctxBtn = document.createElement("button");
+        ctxBtn.type = "button";
+        const ctxWarnings = state.currentStory.last_generation_context.warnings || [];
+        ctxBtn.className = "seg-action-btn" + (ctxWarnings.length > 0 ? " has-warning" : "");
+        ctxBtn.title =
+          ctxWarnings.length > 0
+            ? `Context Warning: ${ctxWarnings[0]}`
+            : "Inspect the context sent for the last AI generation";
+        ctxBtn.textContent = ctxWarnings.length > 0 ? "⚠ View Context" : "View Context";
+        ctxBtn.onclick = () => openContextViewer("last");
+        bar.appendChild(ctxBtn);
+      }
+
+      const isLastAiMulti =
+        seg.kind === "ai" &&
+        seg.id === segs[segs.length - 1]?.id &&
+        Array.isArray(seg.variants) &&
+        seg.variants.length > 1;
+      if (isLastAiMulti) {
+        const prevV = document.createElement("button");
+        prevV.type = "button";
+        prevV.className = "seg-action-btn";
+        prevV.textContent = "‹";
+        prevV.title = "Previous retry generation";
+        prevV.onclick = () => cycleRetryVariant(-1);
+
+        const badgeV = document.createElement("span");
+        badgeV.className = "seg-action-btn";
+        badgeV.style.cursor = "default";
+        badgeV.textContent = `${(seg.variant_idx ?? 0) + 1}/${seg.variants.length}`;
+
+        const nextV = document.createElement("button");
+        nextV.type = "button";
+        nextV.className = "seg-action-btn";
+        nextV.textContent = "›";
+        nextV.title = "Next retry generation";
+        nextV.onclick = () => cycleRetryVariant(1);
+
+        bar.append(prevV, badgeV, nextV);
+      }
+
+      if (seg.kind === "do" || seg.kind === "say") {
+        const nameBtn = document.createElement("button");
+        nameBtn.type = "button";
+        nameBtn.className = "seg-action-btn";
+        nameBtn.title = "Set or update Third Person character name";
+        nameBtn.textContent = "Change Name";
+        nameBtn.onclick = async () => {
+          const next = window.prompt(
+            "Character Name (enables Third Person / character.name):",
+            state.currentStory?.character_name || ""
+          );
+          if (next === null) return;
+          const data = await api(`/api/stories/${encodeURIComponent(state.currentStory.id)}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              character_name: next.trim(),
+              third_person: Boolean(next.trim()) || Boolean(state.currentStory?.third_person),
+            }),
+          });
+          state.currentStory = data.story;
+          populateSettingsPanel();
+          updateModeUI();
+        };
+        bar.appendChild(nameBtn);
+      }
+    }
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "seg-action-btn seg-bar-close";
+    closeBtn.textContent = "×";
+    closeBtn.title = "Deselect";
+    closeBtn.onclick = () => {
+      state.activeToolbarSegmentId = null;
+      els.storyFeed.querySelectorAll(".segment.toolbar-open").forEach((node) => {
+        node.classList.remove("toolbar-open");
+      });
+      renderSegmentActionBar();
+    };
+    bar.appendChild(closeBtn);
+    bar.classList.remove("hidden");
+  }
+
   function renderStoryFeed() {
     const feed = els.storyFeed;
     feed.innerHTML = "";
@@ -778,9 +1011,13 @@
         ? "Generating your opening scene, or type below to start..."
         : "Your story is a blank page. Use Story mode to set the scene, or Do / Say to jump right in.";
       feed.appendChild(empty);
+      renderSegmentActionBar();
       updateControlsState();
       return;
     }
+
+    let activeProseRun = null;
+    let prevInlineSeg = null;
 
     for (const seg of segs) {
       const canSwipeRetry =
@@ -790,67 +1027,15 @@
         seg.id === segs[segs.length - 1]?.id &&
         Array.isArray(seg.variants) &&
         seg.variants.length > 1;
-      const el = document.createElement("div");
-      el.className =
-        `segment kind-${seg.kind}` +
-        (state.activeToolbarSegmentId === seg.id ? " toolbar-open" : "") +
-        (canSwipeRetry ? " swipable-retry" : "");
-      el.dataset.segId = seg.id;
+      const isEditing = state.editingSegmentId === seg.id;
 
-      let justSwiped = false;
-      let retryCarousel = null;
-      let retryTrack = null;
-      let retryBadgeEl = null;
-      let retryHintEl = null;
+      if (isEditing) {
+        activeProseRun = null;
+        prevInlineSeg = null;
+        const el = document.createElement("div");
+        el.className = `segment kind-${seg.kind} segment-editing`;
+        el.dataset.segId = seg.id;
 
-      const setTrackOffset = (idx, dxPx = 0, animate = false) => {
-        if (!retryTrack) return;
-        retryTrack.style.transition = animate
-          ? "transform 0.17s cubic-bezier(0.2, 0.9, 0.3, 1)"
-          : "none";
-        retryTrack.style.transform = `translate3d(calc(${-idx * 100}% + ${dxPx}px), 0, 0)`;
-      };
-
-      const commitVariantIdx = (newIdx, animate = true) => {
-        const clamped = Math.max(0, Math.min(seg.variants.length - 1, newIdx));
-        setTrackOffset(clamped, 0, animate);
-        const label = `${clamped + 1}/${seg.variants.length}`;
-        if (retryBadgeEl) retryBadgeEl.textContent = label;
-        if (retryHintEl) retryHintEl.textContent = `⇄ ${label}`;
-        if (clamped !== (seg.variant_idx ?? 0)) {
-          seg.variant_idx = clamped;
-          seg.text = seg.variants[clamped];
-          cycleRetryVariant(1, clamped).catch((err) => showError(err.message));
-        }
-      };
-
-      const slideToVariant = (dir) => {
-        if (!retryTrack) return;
-        const total = seg.variants.length;
-        const nextIdx = ((seg.variant_idx ?? 0) + (dir >= 0 ? 1 : -1) + total) % total;
-        commitVariantIdx(nextIdx, true);
-      };
-
-      el.addEventListener("click", (e) => {
-        if (
-          justSwiped ||
-          state.isGenerating ||
-          e.target.closest(".segment-toolbar, .segment-edit-box") ||
-          window.getSelection()?.toString()
-        ) {
-          return;
-        }
-        state.activeToolbarSegmentId =
-          state.activeToolbarSegmentId === seg.id ? null : seg.id;
-        feed.querySelectorAll(".segment").forEach((node) => {
-          node.classList.toggle(
-            "toolbar-open",
-            node.dataset.segId === state.activeToolbarSegmentId
-          );
-        });
-      });
-
-      if (state.editingSegmentId === seg.id) {
         const box = document.createElement("div");
         box.className = "segment-edit-box";
         const ta = document.createElement("textarea");
@@ -879,220 +1064,120 @@
         actions.append(cancelBtn, saveBtn);
         box.append(ta, actions);
         el.appendChild(box);
-      } else {
-        if (canSwipeRetry) {
-          retryCarousel = document.createElement("div");
-          retryCarousel.className = "retry-carousel";
-          retryTrack = document.createElement("div");
-          retryTrack.className = "retry-track";
-          for (const vText of seg.variants) {
-            const slide = document.createElement("div");
-            slide.className = "retry-slide";
-            const textSpan = document.createElement("span");
-            textSpan.className = "segment-text";
-            textSpan.textContent = vText;
-            slide.appendChild(textSpan);
-            retryTrack.appendChild(slide);
-          }
-          retryCarousel.appendChild(retryTrack);
-          setTrackOffset(seg.variant_idx ?? 0, 0, false);
-
-          let startX = 0;
-          let startY = 0;
-          let startTime = 0;
-          let dragDx = 0;
-          let axisLock = null; // null | "x" | "y"
-
-          retryCarousel.addEventListener(
-            "touchstart",
-            (e) => {
-              if (e.touches.length !== 1) return;
-              startX = e.touches[0].clientX;
-              startY = e.touches[0].clientY;
-              startTime = Date.now();
-              dragDx = 0;
-              axisLock = null;
-              setTrackOffset(seg.variant_idx ?? 0, 0, false);
-            },
-            { passive: true }
-          );
-          retryCarousel.addEventListener(
-            "touchmove",
-            (e) => {
-              if (e.touches.length !== 1 || axisLock === "y") return;
-              const dx = e.touches[0].clientX - startX;
-              const dy = e.touches[0].clientY - startY;
-              if (axisLock === null) {
-                if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-                  axisLock = "x";
-                  justSwiped = true;
-                } else if (Math.abs(dy) > 12) {
-                  axisLock = "y";
-                  return;
-                } else {
-                  return;
-                }
-              }
-              const curIdx = seg.variant_idx ?? 0;
-              const atStart = curIdx === 0 && dx > 0;
-              const atEnd = curIdx === seg.variants.length - 1 && dx < 0;
-              dragDx = atStart || atEnd ? dx * 0.25 : dx;
-              setTrackOffset(curIdx, dragDx, false);
-            },
-            { passive: true }
-          );
-          const finishDrag = (commit) => {
-            if (axisLock === "x") {
-              const curIdx = seg.variant_idx ?? 0;
-              const w = retryCarousel.clientWidth || 320;
-              const elapsed = Math.max(1, Date.now() - startTime);
-              const vx = dragDx / elapsed; // px/ms
-              let nextIdx = curIdx;
-              // Require either >35% drag distance or a deliberate brisk flick
-              if (commit && !window.getSelection()?.toString()) {
-                if (dragDx < -w * 0.35 || (dragDx < -56 && vx < -0.55)) {
-                  nextIdx = Math.min(seg.variants.length - 1, curIdx + 1);
-                } else if (dragDx > w * 0.35 || (dragDx > 56 && vx > 0.55)) {
-                  nextIdx = Math.max(0, curIdx - 1);
-                }
-              }
-              commitVariantIdx(nextIdx, true);
-              setTimeout(() => {
-                justSwiped = false;
-              }, 140);
-            }
-            axisLock = null;
-          };
-          retryCarousel.addEventListener("touchend", () => finishDrag(true), { passive: true });
-          retryCarousel.addEventListener("touchcancel", () => finishDrag(false), { passive: true });
-          el.appendChild(retryCarousel);
-        } else {
-          const textSpan = document.createElement("span");
-          textSpan.className = "segment-text";
-          textSpan.textContent = seg.text;
-          el.appendChild(textSpan);
-        }
-
-        if (!state.isGenerating) {
-          const toolbar = document.createElement("div");
-          toolbar.className = "segment-toolbar";
-
-          const badge = document.createElement("span");
-          badge.className = "seg-badge";
-          badge.textContent = seg.kind === "opening" ? "opening (fixed)" : seg.kind;
-          toolbar.appendChild(badge);
-
-          if (seg.kind !== "opening") {
-            const editBtn = document.createElement("button");
-            editBtn.type = "button";
-            editBtn.className = "seg-action-btn";
-            editBtn.textContent = "Edit";
-            editBtn.onclick = () => {
-              state.activeToolbarSegmentId = null;
-              state.editingSegmentId = seg.id;
-              renderStoryFeed();
-            };
-
-            const delBtn = document.createElement("button");
-            delBtn.type = "button";
-            delBtn.className = "seg-action-btn del";
-            delBtn.textContent = "Delete";
-            delBtn.onclick = () => deleteSegment(seg.id);
-
-            const eraseBtn = document.createElement("button");
-            eraseBtn.type = "button";
-            eraseBtn.className = "seg-action-btn del";
-            eraseBtn.title = "Erase this and all following segments (/eth)";
-            eraseBtn.textContent = "Erase to Here";
-            eraseBtn.onclick = async () => {
-              const res = await api(
-                `/api/stories/${encodeURIComponent(state.currentStory.id)}/erase-to-here`,
-                { method: "POST", body: JSON.stringify({ seg_id: seg.id }) }
-              );
-              state.currentStory = res.story;
-              renderStoryFeed();
-              refreshStoriesList();
-            };
-
-            toolbar.append(editBtn, delBtn, eraseBtn);
-
-            if (seg.kind === "ai" && state.currentStory?.last_generation_context) {
-              const ctxBtn = document.createElement("button");
-              ctxBtn.type = "button";
-              const ctxWarnings = state.currentStory.last_generation_context.warnings || [];
-              ctxBtn.className = "seg-action-btn" + (ctxWarnings.length > 0 ? " has-warning" : "");
-              ctxBtn.title =
-                ctxWarnings.length > 0
-                  ? `Context Warning: ${ctxWarnings[0]}`
-                  : "Inspect the context sent for the last AI generation";
-              ctxBtn.textContent = ctxWarnings.length > 0 ? "⚠ View Context" : "View Context";
-              ctxBtn.onclick = () => openContextViewer("last");
-              toolbar.appendChild(ctxBtn);
-            }
-            if (canSwipeRetry) {
-              const prevV = document.createElement("button");
-              prevV.type = "button";
-              prevV.className = "seg-action-btn";
-              prevV.textContent = "‹";
-              prevV.title = "Previous retry generation";
-              prevV.onclick = () => slideToVariant(-1);
-
-              const badgeV = document.createElement("span");
-              badgeV.className = "seg-action-btn";
-              badgeV.style.cursor = "default";
-              badgeV.textContent = `${(seg.variant_idx ?? 0) + 1}/${seg.variants.length}`;
-              retryBadgeEl = badgeV;
-
-              const nextV = document.createElement("button");
-              nextV.type = "button";
-              nextV.className = "seg-action-btn";
-              nextV.textContent = "›";
-              nextV.title = "Next retry generation";
-              nextV.onclick = () => slideToVariant(1);
-
-              toolbar.append(prevV, badgeV, nextV);
-            }
-            if (seg.kind === "do" || seg.kind === "say") {
-              const nameBtn = document.createElement("button");
-              nameBtn.type = "button";
-              nameBtn.className = "seg-action-btn";
-              nameBtn.title = "Set or update Third Person character name";
-              nameBtn.textContent = "Change Name";
-              nameBtn.onclick = async () => {
-                const next = window.prompt(
-                  "Character Name (enables Third Person / character.name):",
-                  state.currentStory?.character_name || ""
-                );
-                if (next === null) return;
-                const data = await api(`/api/stories/${encodeURIComponent(state.currentStory.id)}`, {
-                  method: "PATCH",
-                  body: JSON.stringify({
-                    character_name: next.trim(),
-                    third_person: Boolean(next.trim()) || Boolean(state.currentStory?.third_person),
-                  }),
-                });
-                state.currentStory = data.story;
-                populateSettingsPanel();
-                updateModeUI();
-              };
-              toolbar.appendChild(nameBtn);
-            }
-          }
-
-          el.appendChild(toolbar);
-        }
-        if (canSwipeRetry) {
-          const hint = document.createElement("div");
-          hint.className = "retry-swipe-hint";
-          hint.textContent = `⇄ ${(seg.variant_idx ?? 0) + 1}/${seg.variants.length}`;
-          retryHintEl = hint;
-          el.appendChild(hint);
-        }
+        feed.appendChild(el);
+        continue;
       }
 
-      feed.appendChild(el);
+      const el = document.createElement("span");
+      el.className =
+        `segment segment-inline kind-${seg.kind}` +
+        (state.activeToolbarSegmentId === seg.id ? " toolbar-open" : "") +
+        (canSwipeRetry ? " swipable-retry" : "");
+      el.dataset.segId = seg.id;
+
+      let justSwiped = false;
+      const textSpan = document.createElement("span");
+      textSpan.className = "segment-text";
+      textSpan.textContent = seg.text;
+      el.appendChild(textSpan);
+
+      if (canSwipeRetry) {
+        let startX = 0;
+        let startY = 0;
+        let startTime = 0;
+        let dragDx = 0;
+        let axisLock = null;
+
+        el.addEventListener(
+          "touchstart",
+          (e) => {
+            if (e.touches.length !== 1) return;
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            startTime = Date.now();
+            dragDx = 0;
+            axisLock = null;
+          },
+          { passive: true }
+        );
+        el.addEventListener(
+          "touchmove",
+          (e) => {
+            if (e.touches.length !== 1 || axisLock === "y") return;
+            const dx = e.touches[0].clientX - startX;
+            const dy = e.touches[0].clientY - startY;
+            if (axisLock === null) {
+              if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+                axisLock = "x";
+                justSwiped = true;
+              } else if (Math.abs(dy) > 12) {
+                axisLock = "y";
+                return;
+              } else {
+                return;
+              }
+            }
+            dragDx = dx;
+          },
+          { passive: true }
+        );
+        const finishDrag = (commit) => {
+          if (axisLock === "x") {
+            const elapsed = Math.max(1, Date.now() - startTime);
+            const vx = dragDx / elapsed;
+            if (commit && !window.getSelection()?.toString()) {
+              if (dragDx < -80 || (dragDx < -48 && vx < -0.5)) {
+                cycleRetryVariant(1).catch((err) => showError(err.message));
+              } else if (dragDx > 80 || (dragDx > 48 && vx > 0.5)) {
+                cycleRetryVariant(-1).catch((err) => showError(err.message));
+              }
+            }
+            setTimeout(() => {
+              justSwiped = false;
+            }, 140);
+          }
+          axisLock = null;
+        };
+        el.addEventListener("touchend", () => finishDrag(true), { passive: true });
+        el.addEventListener("touchcancel", () => finishDrag(false), { passive: true });
+      }
+
+      el.addEventListener("click", (e) => {
+        if (
+          justSwiped ||
+          state.isGenerating ||
+          e.target.closest(".segment-edit-box") ||
+          window.getSelection()?.toString()
+        ) {
+          return;
+        }
+        state.activeToolbarSegmentId =
+          state.activeToolbarSegmentId === seg.id ? null : seg.id;
+        feed.querySelectorAll(".segment").forEach((node) => {
+          node.classList.toggle(
+            "toolbar-open",
+            node.dataset.segId === state.activeToolbarSegmentId
+          );
+        });
+        renderSegmentActionBar();
+      });
+
+      if (!activeProseRun) {
+        activeProseRun = document.createElement("div");
+        activeProseRun.className = "prose-run";
+        feed.appendChild(activeProseRun);
+      }
+      if (prevInlineSeg) {
+        const sep = segmentJoinSeparator(prevInlineSeg, seg);
+        if (sep) {
+          activeProseRun.appendChild(document.createTextNode(sep));
+        }
+      }
+      activeProseRun.appendChild(el);
+      prevInlineSeg = seg;
     }
 
+    renderSegmentActionBar();
     updateControlsState();
   }
 
@@ -1518,6 +1603,13 @@
     renderScenariosGrid();
   }
 
+  async function refreshScriptsList() {
+    const data = await api("/api/scripts");
+    state.scripts = data.scripts || [];
+    renderStoryScriptsPanel();
+    renderScenarioScriptsPanel();
+  }
+
   async function saveScenarioForm() {
     const name = els.scenarioNameInput.value.trim();
     const scenarioType = els.scenarioTypeSelect.value;
@@ -1665,12 +1757,31 @@
     return steps;
   }
 
+  function syncPlaySetupScriptPills(ps) {
+    if (!ps) return;
+    const isOn = Boolean(ps.enableInnerSelf);
+    const acOn = Boolean(ps.enableAutoCards);
+    if (els.btnSetupInnerSelf) {
+      els.btnSetupInnerSelf.classList.toggle("active", isOn);
+      els.btnSetupInnerSelf.setAttribute("aria-pressed", String(isOn));
+    }
+    if (els.btnSetupAutoCards) {
+      els.btnSetupAutoCards.classList.toggle("active", acOn);
+      els.btnSetupAutoCards.setAttribute("aria-pressed", String(acOn));
+      els.btnSetupAutoCards.title =
+        isOn && acOn
+          ? "Auto-Cards enabled via Inner Self's integrated mode (no conflicts)"
+          : "Enable Auto-Cards (auto-create & update Story Cards)";
+    }
+  }
+
   function renderPlaySetupModal() {
     const ps = state.playSetup;
     if (!ps) return;
     const sc = ps.scenario;
     els.playSetupTitle.textContent = sc.name;
     els.playSetupBody.innerHTML = "";
+    syncPlaySetupScriptPills(ps);
 
     const mcState =
       sc.scenario_type === "multiple_choice"
@@ -1697,10 +1808,17 @@
         qsBtn.innerHTML =
           "<strong>⚡ Quickstart</strong><span>Jump right in with a randomly generated Name, Gender, and Story Card combination.</span>";
         qsBtn.onclick = async () => {
-          await startStoryFromScenario(sc.id, {
-            quickstart: true,
-            autoGenerate: true,
-          });
+          qsBtn.disabled = true;
+          try {
+            await startStoryFromScenario(sc.id, {
+              quickstart: true,
+              autoGenerate: true,
+              enableInnerSelf: Boolean(ps.enableInnerSelf),
+              enableAutoCards: Boolean(ps.enableAutoCards),
+            });
+          } finally {
+            qsBtn.disabled = false;
+          }
         };
 
         const ccBtn = document.createElement("button");
@@ -1994,6 +2112,14 @@
       return;
     }
 
+    const scAttached = sc.attached_scripts || [];
+    const preInnerSelf = scAttached.some(
+      (x) => (x.script_id === "community-inner-self" || x.script_id === "community-inner-self-ac") && x.enabled !== false
+    );
+    const preAutoCards = scAttached.some(
+      (x) => (x.script_id === "community-auto-cards" || x.script_id === "community-inner-self-ac") && x.enabled !== false
+    );
+
     state.playSetup = {
       scenario: sc,
       choicePath: [],
@@ -2004,6 +2130,8 @@
       ccStep: 0,
       ccByCategory: {},
       ccSearch: "",
+      enableInnerSelf: preInnerSelf,
+      enableAutoCards: preAutoCards,
     };
     renderPlaySetupModal();
     els.playSetupModal.classList.remove("hidden");
@@ -2011,7 +2139,16 @@
 
   async function startStoryFromScenario(
     scenarioId,
-    { choiceId = null, choicePath = null, placeholderAnswers = null, selectedCardIds = null, quickstart = false, autoGenerate = false } = {}
+    {
+      choiceId = null,
+      choicePath = null,
+      placeholderAnswers = null,
+      selectedCardIds = null,
+      quickstart = false,
+      autoGenerate = false,
+      enableInnerSelf = false,
+      enableAutoCards = false,
+    } = {}
   ) {
     const data = await api("/api/stories", {
       method: "POST",
@@ -2022,8 +2159,13 @@
         placeholder_answers: placeholderAnswers,
         selected_card_ids: selectedCardIds,
         quickstart,
+        enable_inner_self: Boolean(enableInnerSelf),
+        enable_auto_cards: Boolean(enableAutoCards),
       }),
     });
+    if (enableInnerSelf || enableAutoCards) {
+      await refreshScriptsList();
+    }
     state.currentStory = data.story;
     state.editingSegmentId = null;
 
@@ -2320,14 +2462,18 @@
     state.abortController = new AbortController();
     updateControlsState();
 
-    // Create live streaming AI element
-    const streamEl = document.createElement("div");
-    streamEl.className = "segment kind-ai";
-
     let reasoningDetails = null;
     let reasoningPre = null;
+    let streamProseRun = null;
+    let streamPrevSeg = null;
+    let sepNode = null;
+    let sepApplied = false;
+    let isContinuingInline = false;
+
+    const streamEl = document.createElement("span");
+    streamEl.className = "segment segment-inline kind-ai";
     const contentSpan = document.createElement("span");
-    contentSpan.className = "segment-text streaming-cursor";
+    contentSpan.className = "segment-text streaming-cursor stream-continuation";
     streamEl.appendChild(contentSpan);
 
     let streamAttached = false;
@@ -2335,9 +2481,38 @@
       if (!streamAttached) {
         const empty = els.storyFeed.querySelector(".empty-state");
         if (empty) empty.remove();
-        els.storyFeed.appendChild(streamEl);
+        const segsNow = state.currentStory?.segments || [];
+        const prevSegNow = segsNow[segsNow.length - 1];
+        const lastProseRun = els.storyFeed.lastElementChild;
+        if (prevSegNow && lastProseRun && lastProseRun.classList.contains("prose-run")) {
+          streamProseRun = lastProseRun;
+          streamPrevSeg = prevSegNow;
+          isContinuingInline = true;
+          sepNode = document.createTextNode("");
+          streamProseRun.append(sepNode, streamEl);
+        } else {
+          streamProseRun = document.createElement("div");
+          streamProseRun.className = "prose-run";
+          streamProseRun.appendChild(streamEl);
+          els.storyFeed.appendChild(streamProseRun);
+        }
         streamAttached = true;
       }
+    };
+
+    let userScrolledAway = false;
+    let lastAutoScrollTop = els.storyFeed.scrollTop;
+    const onFeedScroll = () => {
+      if (Math.abs(els.storyFeed.scrollTop - lastAutoScrollTop) > 4) {
+        userScrolledAway = true;
+      }
+    };
+    els.storyFeed.addEventListener("scroll", onFeedScroll, { passive: true });
+
+    const scrollStreamingFeed = (anchorEl) => {
+      if (userScrolledAway || state.currentStory?.settings?.follow_latest_text === false) return;
+      els.storyFeed.scrollTop = getStreamingScrollTop(anchorEl);
+      lastAutoScrollTop = els.storyFeed.scrollTop;
     };
 
     try {
@@ -2379,12 +2554,12 @@
           state.currentStory.segments.push(data.segment);
           renderStoryFeed();
           ensureStreamAttached();
-          scrollFeedToBottom();
+          scrollStreamingFeed(contentSpan);
         } else if (eventName === "story_sync" && data.story) {
           state.currentStory = data.story;
           renderStoryFeed();
           ensureStreamAttached();
-          scrollFeedToBottom();
+          scrollStreamingFeed(contentSpan);
         } else if (eventName === "reasoning" && data.token) {
           ensureStreamAttached();
           if (!reasoningDetails) {
@@ -2396,14 +2571,29 @@
             reasoningPre.style.whiteSpace = "pre-wrap";
             reasoningPre.style.marginTop = "6px";
             reasoningDetails.append(summary, reasoningPre);
-            streamEl.insertBefore(reasoningDetails, contentSpan);
+            if (streamProseRun && streamProseRun.parentNode) {
+              streamProseRun.parentNode.insertBefore(reasoningDetails, streamProseRun);
+            } else {
+              streamEl.insertBefore(reasoningDetails, contentSpan);
+            }
           }
           reasoningPre.textContent += data.token;
-          scrollFeedToBottom();
+          scrollStreamingFeed(contentSpan);
         } else if (eventName === "token" && data.token) {
           ensureStreamAttached();
-          contentSpan.textContent += data.token;
-          scrollFeedToBottom();
+          if (isContinuingInline && !sepApplied && data.token.trim()) {
+            sepNode.textContent = segmentJoinSeparator(streamPrevSeg, {
+              kind: "ai",
+              text: data.token,
+            });
+            contentSpan.textContent += data.token.trimStart();
+            sepApplied = true;
+          } else if (isContinuingInline && !sepApplied) {
+            // Skip leading whitespace tokens before separator is decided.
+          } else {
+            contentSpan.textContent += data.token;
+          }
+          scrollStreamingFeed(contentSpan);
         } else if (eventName === "error") {
           showError(data.message || "LLM generation error");
         } else if (eventName === "done" && data.story) {
@@ -2445,10 +2635,27 @@
         }
       }
     } finally {
+      els.storyFeed.removeEventListener("scroll", onFeedScroll);
       state.isGenerating = false;
       state.abortController = null;
       renderStoryFeed();
-      scrollFeedToBottom();
+      if (isContinuingInline) {
+        if (!userScrolledAway && state.currentStory?.settings?.follow_latest_text !== false) {
+          const maxFeedScroll = Math.max(
+            0,
+            els.storyFeed.scrollHeight - els.storyFeed.clientHeight
+          );
+          els.storyFeed.scrollTop = Math.min(maxFeedScroll, lastAutoScrollTop);
+        }
+      } else {
+        const segs = state.currentStory?.segments || [];
+        const lastSeg = segs[segs.length - 1];
+        if (lastSeg?.kind === "ai") {
+          scrollStreamingFeed(els.storyFeed.lastElementChild);
+        } else if (!userScrolledAway) {
+          scrollFeedToBottom();
+        }
+      }
       refreshStoriesList();
     }
   }
@@ -2567,9 +2774,38 @@
   }
 
   function wireEvents() {
+    let composerTapHadInputFocus = false;
+    const isComposerTextInput = (el) => el === els.playerInput || el === els.retryChangesInput;
+    const restoreComposerFocus = () => {
+      if (composerTapHadInputFocus && !isComposerTextInput(document.activeElement)) {
+        els.playerInput.focus({ preventScroll: true });
+      }
+      composerTapHadInputFocus = false;
+    };
+
+    if (els.composer) {
+      els.composer.addEventListener("pointerdown", (e) => {
+        if (isComposerTextInput(e.target)) return;
+        composerTapHadInputFocus = document.activeElement === els.playerInput;
+      });
+
+      // Keep the active textarea focused when tapping anywhere on the composer bar
+      // (mode switcher, quick actions, send buttons, or bar gaps) so mobile keyboards stay open.
+      els.composer.addEventListener("mousedown", (e) => {
+        if (isComposerTextInput(e.target)) return;
+        if (document.activeElement === els.playerInput) {
+          composerTapHadInputFocus = true;
+        }
+        e.preventDefault();
+      });
+
+      els.composer.addEventListener("click", restoreComposerFocus);
+    }
+
     els.btnModeCollapse.addEventListener("click", (e) => {
       e.stopPropagation();
       setModeExpanded(false);
+      restoreComposerFocus();
     });
 
     els.modeBtns.forEach((btn) => {
@@ -2577,8 +2813,10 @@
         e.stopPropagation();
         if (!els.modeSwitcher.classList.contains("expanded")) {
           setModeExpanded(true);
+          restoreComposerFocus();
           return;
         }
+        composerTapHadInputFocus = false;
         setMode(btn.dataset.mode);
       });
     });
@@ -2587,11 +2825,12 @@
       if (els.modeSwitcher.classList.contains("expanded") && !els.modeSwitcher.contains(e.target)) {
         setModeExpanded(false);
       }
-      if (state.activeToolbarSegmentId && !e.target.closest(".segment")) {
+      if (state.activeToolbarSegmentId && !e.target.closest(".segment") && !e.target.closest("#segment-action-bar")) {
         state.activeToolbarSegmentId = null;
         els.storyFeed.querySelectorAll(".segment.toolbar-open").forEach((node) => {
           node.classList.remove("toolbar-open");
         });
+        renderSegmentActionBar();
       }
     });
 
@@ -2645,7 +2884,11 @@
       }
     });
     els.btnCancelRetryChanges.addEventListener("click", () => {
+      const hadRetryFocus = document.activeElement === els.retryChangesInput;
       els.retryChangesBar.classList.add("hidden");
+      if (hadRetryFocus) {
+        els.playerInput.focus({ preventScroll: true });
+      }
     });
     const submitRetryChanges = async () => {
       const inst = els.retryChangesInput.value.trim();
@@ -2761,6 +3004,16 @@
     els.storyCardsTypeFilter.addEventListener("change", renderStoryCardsList);
 
     els.btnClosePlaySetup.addEventListener("click", () => els.playSetupModal.classList.add("hidden"));
+    els.btnSetupInnerSelf?.addEventListener("click", () => {
+      if (!state.playSetup) return;
+      state.playSetup.enableInnerSelf = !state.playSetup.enableInnerSelf;
+      syncPlaySetupScriptPills(state.playSetup);
+    });
+    els.btnSetupAutoCards?.addEventListener("click", () => {
+      if (!state.playSetup) return;
+      state.playSetup.enableAutoCards = !state.playSetup.enableAutoCards;
+      syncPlaySetupScriptPills(state.playSetup);
+    });
     els.btnCancelPlaySetup.addEventListener("click", () => els.playSetupModal.classList.add("hidden"));
     els.btnBackPlaySetup.addEventListener("click", () => {
       const ps = state.playSetup;
@@ -2796,13 +3049,27 @@
         sc.scenario_type === "multiple_choice"
           ? [...(ps.choicePath || []), ...(ps.choiceId ? [ps.choiceId] : [])]
           : null;
-      await startStoryFromScenario(sc.id, {
-        choiceId: ps.choiceId,
-        choicePath: fullPath,
-        placeholderAnswers: ps.answers,
-        selectedCardIds: Array.from(ps.selectedCardIds),
-        autoGenerate: sc.scenario_type === "character_creator",
-      });
+      const origLabel = els.btnConfirmPlaySetup.textContent;
+      els.btnConfirmPlaySetup.disabled = true;
+      if (ps.enableInnerSelf || ps.enableAutoCards) {
+        els.btnConfirmPlaySetup.textContent = "Preparing Scripts...";
+      }
+      try {
+        await startStoryFromScenario(sc.id, {
+          choiceId: ps.choiceId,
+          choicePath: fullPath,
+          placeholderAnswers: ps.answers,
+          selectedCardIds: Array.from(ps.selectedCardIds),
+          autoGenerate: sc.scenario_type === "character_creator",
+          enableInnerSelf: Boolean(ps.enableInnerSelf),
+          enableAutoCards: Boolean(ps.enableAutoCards),
+        });
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        els.btnConfirmPlaySetup.disabled = false;
+        els.btnConfirmPlaySetup.textContent = origLabel;
+      }
     });
 
     els.btnSettings.addEventListener("click", () => {
@@ -2883,6 +3150,40 @@
     els.btnEditStoryBuiltinScript.addEventListener("click", () => openScriptEditor("story_builtin"));
     els.btnEditScenarioScript.addEventListener("click", () => openScriptEditor("scenario_builtin"));
     els.btnNewReusableScript.addEventListener("click", () => openScriptEditor("new_reusable"));
+
+    const installCommunityScriptForStory = async (btn, kind, labelText) => {
+      if (!state.currentStory) return;
+      btn.disabled = true;
+      btn.textContent = "Installing...";
+      try {
+        const res = await api("/api/scripts/install-community", {
+          method: "POST",
+          body: JSON.stringify({ kind }),
+        });
+        await refreshScriptsList();
+        const sid = res.script?.id;
+        if (sid) {
+          if (!Array.isArray(state.currentStory.attached_scripts)) {
+            state.currentStory.attached_scripts = [];
+          }
+          if (!state.currentStory.attached_scripts.some((x) => x.script_id === sid)) {
+            state.currentStory.attached_scripts.push({ script_id: sid, enabled: true });
+          }
+          renderStoryScriptsPanel();
+        }
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = labelText;
+      }
+    };
+    els.btnInstallInnerSelf.addEventListener("click", () =>
+      installCommunityScriptForStory(els.btnInstallInnerSelf, "inner_self", "+ Inner Self (🎭)")
+    );
+    els.btnInstallAutoCards.addEventListener("click", () =>
+      installCommunityScriptForStory(els.btnInstallAutoCards, "auto_cards", "+ Auto-Cards")
+    );
 
     els.btnAttachStoryScript.addEventListener("click", () => {
       if (!state.currentStory) return;

@@ -8,6 +8,7 @@ import random
 import re
 import subprocess
 import time
+import urllib.request
 import uuid
 import zipfile
 from collections import Counter
@@ -793,13 +794,136 @@ def trim_incomplete_sentence(text: str) -> str:
     return s
 
 
+def _extract_continuation_tail(text: str, max_chars: int = 220) -> str:
+    """Return the trailing excerpt of an AI segment for anchored inline continuation."""
+    s = (text or "").strip()
+    if not s:
+        return ""
+    if len(s) <= max_chars:
+        return s
+    tail = s[-max_chars:]
+    space_idx = tail.find(" ")
+    if 0 <= space_idx < len(tail) - 20:
+        tail = tail[space_idx + 1 :]
+    return f"...{tail.lstrip()}"
+
+
+def _has_incomplete_tail(text: str) -> bool:
+    """Return True if `text` ends mid-sentence, with an ellipsis, or with an unclosed quote."""
+    prev = (text or "").rstrip()
+    if not prev:
+        return False
+    # Trailing ellipsis (... or …) is an interrupted beat, not a finished paragraph.
+    if prev.endswith("...") or prev.endswith("…"):
+        return True
+    last_para = prev.rsplit("\n", 1)[-1]
+    if last_para.count('"') % 2 == 1:
+        return True
+    if last_para.count("\u201c") > last_para.count("\u201d"):
+        return True
+    last_char = prev[-1]
+    if last_char in "—–-,;:(":
+        return True
+    ended_sentence = last_char in ".!?" or (
+        len(prev) >= 2 and last_char in '"\u201d\'\u2019)' and prev[-2] in ".!?"
+    )
+    return not ended_sentence
+
+
+def join_ai_continuation(prev_text: str, addition: str) -> str:
+    """Join a newly generated continuation smoothly onto an existing AI segment."""
+    prev = (prev_text or "").rstrip()
+    add = (addition or "").lstrip()
+    if not prev:
+        return add
+    if not add:
+        return prev
+
+    # Mid-word / punctuation-attached continuation needs no extra whitespace.
+    if add[0] in ",.;:!?\")'\u201d\u2019)]":
+        return prev + add
+    if prev[-1] in "—–-\u201c":
+        return prev + add
+
+    if _has_incomplete_tail(prev) or add[0].islower():
+        return f"{prev} {add}"
+
+    return f"{prev}\n\n{add}"
+
+
+def _strip_suffix_prefix_overlap(text: str, prev_text: str) -> tuple[str, str]:
+    """Strip overlapping suffix-prefix clauses or echoed trailing dialogue from `text`."""
+    s = text.strip()
+    prev = (prev_text or "").strip()
+    if not s or not prev:
+        return s, ""
+
+    incomplete_tail = _has_incomplete_tail(prev)
+
+    # 0. Direct suffix-prefix character overlap (e.g. `"You are...` echoed at start of continuation).
+    max_char_ov = min(220, len(prev), len(s) - 1)
+    s_lower = s.lower()
+    prev_lower = prev.lower()
+    min_char_ov = 6 if incomplete_tail else 16
+    for ln in range(max_char_ov, min_char_ov - 1, -1):
+        # Require match to start on a clean boundary in `prev` (start, whitespace, or quote/punct).
+        start_idx = len(prev) - ln
+        if start_idx > 0 and prev[start_idx - 1].isalnum():
+            continue
+        if prev_lower[start_idx:] == s_lower[:ln]:
+            cut = ln
+            while cut < len(s) and s[cut] in '.…,:;"\'\u201d\u2019)]' and prev[-1] in '.…':
+                cut += 1
+            remainder = s[cut:].lstrip()
+            if remainder:
+                return remainder, s[:cut].strip()
+
+    # 1. Word-level suffix-prefix overlap (e.g. model re-emits trailing words, even 2+ on interrupted beats).
+    prev_tail = prev[-500:]
+    prev_words = [m.group(0).lower() for m in re.finditer(r"[a-z0-9'\u2019]+", prev_tail, re.IGNORECASE)]
+    gen_matches = list(re.finditer(r"[a-z0-9'\u2019]+", s[:500], re.IGNORECASE))
+    min_k = 2 if incomplete_tail else 4
+    min_chars = 6 if incomplete_tail else 16
+    if prev_words and len(gen_matches) > 1:
+        max_k = min(24, len(prev_words), len(gen_matches) - 1)
+        for k in range(max_k, min_k - 1, -1):
+            gen_slice = [m.group(0).lower() for m in gen_matches[:k]]
+            if prev_words[-k:] == gen_slice:
+                overlap_str = " ".join(gen_slice)
+                if len(overlap_str) >= min_chars:
+                    cut_end = gen_matches[k - 1].end()
+                    while cut_end < len(s) and s[cut_end] in '.!?,;:"\'\u201d\u2019)]…':
+                        cut_end += 1
+                    remainder = s[cut_end:].lstrip()
+                    if remainder:
+                        return remainder, s[:cut_end].strip()
+
+    # 2. Echoed trailing quoted dialogue (with optional short speaker attribution).
+    quotes = list(re.finditer(r'["\u201c]([^"\u201d\n]{12,240})["\u201d]', prev_tail))
+    if quotes:
+        last_q_norm = re.sub(r"\W+", " ", quotes[-1].group(1)).strip().lower()
+        if len(last_q_norm) >= 12:
+            lead_m = re.match(
+                r'^(?:[^"\u201c\n]{0,45}?)?["\u201c]([^"\u201d\n]{12,240})["\u201d](?:\s*[,.!?]?\s*)',
+                s,
+            )
+            if lead_m:
+                lead_q_norm = re.sub(r"\W+", " ", lead_m.group(1)).strip().lower()
+                if lead_q_norm == last_q_norm:
+                    remainder = s[lead_m.end():].lstrip()
+                    if remainder:
+                        return remainder, s[:lead_m.end()].strip()
+
+    return s, ""
+
+
 def remove_repeated_leading_sentences(
     generated_text: str,
     recent_texts: list[str],
 ) -> tuple[str, list[str]]:
     """
-    Strip leading sentences from AI output that duplicate sentences in the
-    recent story tail (matching AI Dungeon's 'Remove repeated sentences' default).
+    Strip leading sentences or suffix-prefix dialogue overlap from AI output that
+    duplicates the recent story tail (matching AI Dungeon's 'Remove repeated sentences' default).
     """
     text = generated_text.strip()
     if not text or not recent_texts:
@@ -812,25 +936,28 @@ def remove_repeated_leading_sentences(
             norm = re.sub(r"\W+", " ", sent).strip().lower()
             if len(norm) >= 8:
                 recent_norm.add(norm)
-    if not recent_norm:
-        return text, []
-
-    sentences = re.split(sent_split_re, text)
-    if len(sentences) <= 1:
-        return text, []
 
     removed: list[str] = []
-    idx = 0
-    while idx < len(sentences) - 1:
-        norm = re.sub(r"\W+", " ", sentences[idx]).strip().lower()
-        if norm and norm in recent_norm:
-            removed.append(sentences[idx])
-            idx += 1
-        else:
-            break
-    if not removed:
-        return text, []
-    return " ".join(sentences[idx:]).strip(), removed
+    if recent_norm:
+        sentences = re.split(sent_split_re, text)
+        if len(sentences) > 1:
+            idx = 0
+            while idx < len(sentences) - 1:
+                norm = re.sub(r"\W+", " ", sentences[idx]).strip().lower()
+                if norm and norm in recent_norm:
+                    removed.append(sentences[idx])
+                    idx += 1
+                else:
+                    break
+            if removed:
+                text = " ".join(sentences[idx:]).strip()
+
+    stripped, overlap_removed = _strip_suffix_prefix_overlap(text, recent_texts[-1])
+    if overlap_removed:
+        removed.append(overlap_removed)
+        text = stripped
+
+    return text, removed
 
 
 def _tokenize_words(text: str) -> list[str]:
@@ -1121,7 +1248,16 @@ def run_story_scripts(
         return {"text": current_text, "stop": False, "logs": [], "errors": []}
 
     history_payload = [
-        {"text": seg.text, "rawText": seg.text, "type": seg.kind}
+        {
+            "text": seg.text,
+            "rawText": seg.raw_input or seg.text,
+            "type": (
+                "continue"
+                if seg.kind == "ai"
+                else ("start" if seg.kind == "opening" else seg.kind)
+            ),
+            "rawKind": seg.kind,
+        }
         for seg in story.segments
     ]
     cards_payload = [
@@ -1132,6 +1268,7 @@ def run_story_scripts(
             "card_type": c.card_type,
             "keys": c.keys,
             "entry": c.entry,
+            "value": c.entry,
             "description": c.description,
             "is_pinned": c.is_pinned,
             "isPinned": c.is_pinned,
@@ -1140,11 +1277,15 @@ def run_story_scripts(
         }
         for c in story.story_cards
     ]
+    ctx_limit = max(1024, min(98304, int(story.settings.context_length or 16384)))
     info_payload = {
         "actionCount": len(story.segments),
         "characterName": story.character_name,
         "characterNames": [story.character_name] if story.character_name.strip() else [],
         "thirdPerson": story.third_person,
+        "memoryLength": len(_effective_plot_essentials(story)),
+        "maxChars": ctx_limit * 4,
+        "title": story.title,
         **(extra_info or {}),
     }
 
@@ -1379,11 +1520,28 @@ def build_context_plan(
             ),
         })
     elif messages[-1]["role"] != "user":
-        prompt_msg = (
-            "Write a vivid opening scene for this adventure introducing the protagonist and setting based on Plot Essentials and World Info."
-            if not story.segments
-            else "Continue the story seamlessly from where it left off."
-        )
+        if not story.segments:
+            prompt_msg = (
+                "Write a vivid opening scene for this adventure introducing the protagonist and setting based on Plot Essentials and World Info."
+            )
+        else:
+            trailing_ai = ""
+            for s in reversed(kept_segments):
+                if s.kind != "ai":
+                    break
+                t = s.text.strip()
+                if t:
+                    trailing_ai = join_ai_continuation(t, trailing_ai) if trailing_ai else t
+            anchor_tail = _extract_continuation_tail(trailing_ai or messages[-1]["content"])
+            if anchor_tail:
+                prompt_msg = (
+                    "Continue seamlessly from the exact trailing text below. Output ONLY the next words "
+                    "that come directly after it (do NOT repeat the trailing words, and do NOT reopen "
+                    "a quotation mark if one is already open):\n"
+                    f"{anchor_tail}"
+                )
+            else:
+                prompt_msg = "Continue the story seamlessly from where it left off."
         messages.append({
             "role": "user",
             "content": prompt_msg,
@@ -1416,10 +1574,12 @@ def build_context_plan(
         tail_additions.append(raw_front)
 
     if tail_additions:
-        messages[-1]["content"] = (
-            f"{messages[-1]['content']}\n\n" + "\n\n".join(tail_additions)
-        )
+        # Place reference context before the active turn/continuation anchor so
+        # the model sees the exact latest dialogue/action immediately prior to generating.
+        context_block = "\n\n".join(tail_additions)
+        messages[-1]["content"] = f"{context_block}\n\n{messages[-1]['content']}"
 
+    script_stop = False
     if apply_context_scripts and any(s.get("context", "").strip() for s in _active_scripts_for_story(story)):
         mem_prefix = (used_plot + "\n\n") if used_plot else ""
         body_text = "\n\n".join(m["content"] for m in messages[1:])
@@ -1433,9 +1593,21 @@ def build_context_plan(
                 "maxChars": ctx_limit * 4,
             },
         )
+        script_stop = bool(res.get("stop"))
         modified_ctx = res.get("text")
         if isinstance(modified_ctx, str) and modified_ctx != full_ctx:
-            if len(messages) > 2:
+            # If the script replaced the prompt wholesale (e.g., Auto-Cards generating a card),
+            # omit the RPG narrator system prompt so it doesn't fight the script's meta-prompt.
+            tail_probe = body_text[-40:] if len(body_text) >= 40 else body_text
+            head_probe = full_ctx[:40] if len(full_ctx) >= 40 else full_ctx
+            replaced_wholesale = (
+                bool(tail_probe)
+                and tail_probe not in modified_ctx
+                and head_probe not in modified_ctx
+            )
+            if replaced_wholesale:
+                messages = [{"role": "user", "content": modified_ctx}]
+            elif len(messages) > 2:
                 messages = [messages[0], {"role": "user", "content": modified_ctx}]
             else:
                 messages[-1]["content"] = modified_ctx
@@ -1499,6 +1671,7 @@ def build_context_plan(
         "warnings": warnings,
         "reserved_response_tokens": story.settings.max_tokens,
         "messages": messages,
+        "script_stop": script_stop,
     }
 
 
@@ -1547,6 +1720,86 @@ def save_script(script: Script) -> Script:
     tmp_path.write_text(json.dumps(script.to_dict(), indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
     return script
+
+
+COMMUNITY_SCRIPTS: dict[str, dict[str, str]] = {
+    "inner_self": {
+        "id": "community-inner-self",
+        "name": "Inner Self (🎭)",
+        "version": "1.0.2",
+        "description": "NPC memory, goals, secrets, and self-reflection (LewdLeah/Inner-Self).",
+        "raw_base": "https://raw.githubusercontent.com/LewdLeah/Inner-Self/main/src",
+    },
+    "auto_cards": {
+        "id": "community-auto-cards",
+        "name": "Auto-Cards",
+        "version": "1.1.3",
+        "description": "Automatic Story Card creation and updates during gameplay (LewdLeah/Auto-Cards).",
+        "raw_base": "https://raw.githubusercontent.com/LewdLeah/Auto-Cards/main/src",
+    },
+}
+
+
+def _fetch_community_source(raw_base: str, filename: str, timeout: int = 20) -> str:
+    url = f"{raw_base.rstrip('/')}/{filename}"
+    req = urllib.request.Request(url, headers={"User-Agent": "AI-RPG-Harness/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except Exception as e:
+        raise RuntimeError(f"Failed to download {filename} from {url}: {e}") from e
+
+
+def ensure_community_script(kind: str, *, include_ac: bool = False) -> Script:
+    """Return (and cache locally from GitHub on first use) a community AI Dungeon script."""
+    norm_kind = kind.strip().lower().replace("-", "_")
+    if norm_kind not in COMMUNITY_SCRIPTS:
+        raise ValueError(f"Unknown community script: {kind!r}")
+
+    if norm_kind == "inner_self" and include_ac:
+        combo_id = "community-inner-self-ac"
+        existing_combo = load_script(combo_id)
+        if existing_combo is not None:
+            return existing_combo
+        base_is = ensure_community_script("inner_self", include_ac=False)
+        lib = base_is.library
+        if "IS_AC_ENABLED_BY_DEFAULT: false" in lib:
+            lib = lib.replace("IS_AC_ENABLED_BY_DEFAULT: false", "IS_AC_ENABLED_BY_DEFAULT: true", 1)
+        else:
+            lib = (
+                lib
+                + "\nif (globalThis.MainSettings && globalThis.MainSettings.InnerSelf) { "
+                "globalThis.MainSettings.InnerSelf.IS_AC_ENABLED_BY_DEFAULT = true; }\n"
+            )
+        combo = Script(
+            id=combo_id,
+            name="Inner Self + Auto-Cards (🎭)",
+            description="Inner Self with built-in Auto-Cards enabled (LewdLeah/Inner-Self).",
+            version=base_is.version,
+            library=lib,
+            input=base_is.input,
+            context=base_is.context,
+            output=base_is.output,
+        )
+        return save_script(combo)
+
+    meta = COMMUNITY_SCRIPTS[norm_kind]
+    existing = load_script(meta["id"])
+    if existing is not None:
+        return existing
+
+    raw_base = meta["raw_base"]
+    sc = Script(
+        id=meta["id"],
+        name=meta["name"],
+        description=meta["description"],
+        version=meta["version"],
+        library=_fetch_community_source(raw_base, "library.js"),
+        input=_fetch_community_source(raw_base, "input.js"),
+        context=_fetch_community_source(raw_base, "context.js"),
+        output=_fetch_community_source(raw_base, "output.js"),
+    )
+    return save_script(sc)
 
 
 def create_script(
@@ -1934,6 +2187,8 @@ def create_story_from_scenario(
     placeholder_answers: dict[str, str] | None = None,
     selected_card_ids: list[str] | None = None,
     quickstart: bool = False,
+    enable_inner_self: bool = False,
+    enable_auto_cards: bool = False,
 ) -> Story:
     scenario = load_scenario(scenario_id) if scenario_id else None
     if scenario is None:
@@ -1964,6 +2219,31 @@ def create_story_from_scenario(
         if scenario
         else []
     )
+    if enable_inner_self or enable_auto_cards:
+        target_script = (
+            ensure_community_script("inner_self", include_ac=bool(enable_auto_cards))
+            if enable_inner_self
+            else ensure_community_script("auto_cards")
+        )
+        community_ids = {"community-inner-self", "community-inner-self-ac", "community-auto-cards"}
+        if enable_inner_self:
+            # Replace standalone auto-cards or base inner-self with the coordinated script
+            story_attached_scripts = [
+                s for s in story_attached_scripts if s.get("script_id") not in community_ids
+            ]
+        elif any(
+            s.get("script_id") in ("community-inner-self", "community-inner-self-ac")
+            and s.get("enabled", True)
+            for s in story_attached_scripts
+        ):
+            # Upgrade an already-attached Inner Self to include Auto-Cards
+            target_script = ensure_community_script("inner_self", include_ac=True)
+            story_attached_scripts = [
+                s for s in story_attached_scripts if s.get("script_id") not in community_ids
+            ]
+        if not any(s.get("script_id") == target_script.id for s in story_attached_scripts):
+            if len(story_attached_scripts) < 10:
+                story_attached_scripts.append({"script_id": target_script.id, "enabled": True})
     resolved_mc_title: str | None = None
 
     world_desc = ""

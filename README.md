@@ -165,7 +165,7 @@ Click **`🔌 Model`** in the **top-right of the Home page** (or click the statu
 | `LLM_API_KEY` | *(optional)* | Default Bearer API key for remote OpenAI-compatible providers |
 | `LLM_MODEL` | *(auto)* | Default model name override |
 | `LLM_PORT` | `8080` | Port checked by `start.sh` when using default `LLM_URL` |
-| `LLAMA_SERVE_SCRIPT` | *(optional)* | Path to a local bash script launched when clicking `Start LLM` or running `start.sh` while LLM is offline |
+| `LLAMA_SERVE_SCRIPT` | *(optional)* | Path to a local bash script launched when clicking `Start LLM` in the Web UI |
 | `TAILSCALE` | `0` | Set to `1` to bind Tailscale IP automatically |
 
 ---

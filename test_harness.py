@@ -1361,6 +1361,395 @@ class TestServerAPI(unittest.TestCase):
             llm.shutdown()
             llm.server_close()
 
+    def test_inline_continue_anchor_overlap_and_merge(self):
+        # 1. Suffix-prefix word overlap & echoed trailing quote stripping
+        prev_block = 'Rain hits the glass. Elena leans close and whispers, "Do not trust the captain tonight."'
+        cleaned_word, removed_word = harness.remove_repeated_leading_sentences(
+            'Do not trust the captain tonight. She slips a brass key into your palm.',
+            [prev_block],
+        )
+        self.assertEqual(cleaned_word, "She slips a brass key into your palm.")
+        self.assertTrue(len(removed_word) >= 1)
+
+        cleaned_quote, removed_quote = harness.remove_repeated_leading_sentences(
+            'She whispers, "Do not trust the captain tonight." Footsteps echo outside.',
+            [prev_block],
+        )
+        self.assertEqual(cleaned_quote, "Footsteps echo outside.")
+        self.assertTrue(len(removed_quote) >= 1)
+
+        # Incomplete ellipsis / unclosed quote overlap & inline join (e.g. `"You are...` -> `"You are... quite incorrigible,"`)
+        ellipsis_prev = 'She puffs her cheeks out.\n\n"You are...'
+        ellipsis_cont = '"You are... quite incorrigible," she repeats, her voice low.'
+        cleaned_ellipsis, removed_ellipsis = harness.remove_repeated_leading_sentences(
+            ellipsis_cont,
+            [ellipsis_prev],
+        )
+        self.assertEqual(cleaned_ellipsis, 'quite incorrigible," she repeats, her voice low.')
+        self.assertTrue(len(removed_ellipsis) >= 1)
+        self.assertEqual(
+            harness.join_ai_continuation(ellipsis_prev, cleaned_ellipsis),
+            'She puffs her cheeks out.\n\n"You are... quite incorrigible," she repeats, her voice low.',
+        )
+
+        # 2. join_ai_continuation handles mid-sentence vs paragraph break cleanly
+        self.assertEqual(
+            harness.join_ai_continuation("Elena reaches for", "the iron latch."),
+            "Elena reaches for the iron latch.",
+        )
+        self.assertEqual(
+            harness.join_ai_continuation('She glances back. "Ready?"', "You nod once."),
+            'She glances back. "Ready?"\n\nYou nod once.',
+        )
+
+        # 3. Context placement: Author's Note sits before the latest turn/continuation anchor
+        story = harness.Story(
+            id="cont1",
+            title="Continue Anchor",
+            authors_note="Keep dialogue taut.",
+            segments=[
+                harness.Segment(id="1", kind="opening", text="The harbor fog thickens."),
+                harness.Segment(id="2", kind="ai", text='Elena whispers, "Check the crate."'),
+            ],
+        )
+        msgs = harness.build_chat_messages(story)
+        last_user = msgs[-1]["content"]
+        self.assertLess(last_user.index("Keep dialogue taut."), last_user.index('Elena whispers, "Check the crate."'))
+
+        # 4. SSE Continue after AI merges inline into the existing AI segment and supports Undo
+        turn_count = {"n": 0}
+
+        class MockContinueLLM(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                _ = self.rfile.read(length)
+                turn_count["n"] += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                if turn_count["n"] == 1:
+                    reply = 'The innkeeper slides a mug across the oak bar and mutters, "Stay off the docks after midnight."'
+                else:
+                    reply = 'He mutters, "Stay off the docks after midnight." A gust slams the shutters open.'
+                chunk = {"choices": [{"delta": {"content": reply}}]}
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+                self.wfile.write(b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}\n\n')
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+
+        llm = ThreadingHTTPServer(("127.0.0.1", 0), MockContinueLLM)
+        t = threading.Thread(target=llm.serve_forever, daemon=True)
+        t.start()
+        orig_llm_url = server.LLM_URL
+        server.LLM_URL = f"http://127.0.0.1:{llm.server_address[1]}"
+        try:
+            _, created = self._req("POST", "/api/stories", {"scenario_id": "tavern"})
+            story_id = created["story"]["id"]
+            init_count = len(created["story"]["segments"])
+
+            # First turn
+            req1 = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/api/stories/{story_id}/generate",
+                data=json.dumps({"mode": "do", "text": "sit at the bar"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req1, timeout=5) as resp:
+                resp.read()
+
+            _, s_after_1 = self._req("GET", f"/api/stories/{story_id}")
+            self.assertEqual(len(s_after_1["story"]["segments"]), init_count + 2)
+            first_ai_id = s_after_1["story"]["segments"][-1]["id"]
+
+            # Continue adds a separate undoable/erasable AI segment with echoed dialogue stripped
+            req2 = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/api/stories/{story_id}/generate",
+                data=json.dumps({}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req2, timeout=5) as resp:
+                resp.read()
+
+            _, s_after_2 = self._req("GET", f"/api/stories/{story_id}")
+            self.assertEqual(len(s_after_2["story"]["segments"]), init_count + 3)
+            self.assertEqual(s_after_2["story"]["segments"][-2]["id"], first_ai_id)
+            self.assertEqual(
+                s_after_2["story"]["segments"][-2]["text"],
+                'The innkeeper slides a mug across the oak bar and mutters, "Stay off the docks after midnight."',
+            )
+            self.assertEqual(
+                s_after_2["story"]["segments"][-1]["text"],
+                "A gust slams the shutters open.",
+            )
+
+            # Erase removes ONLY the continuation segment, keeping the earlier AI segment intact
+            st, er_res = self._req("POST", f"/api/stories/{story_id}/erase", {})
+            self.assertEqual(st, 200)
+            self.assertTrue(er_res["erased"])
+            self.assertEqual(len(er_res["story"]["segments"]), init_count + 2)
+            self.assertEqual(er_res["story"]["segments"][-1]["id"], first_ai_id)
+            self.assertEqual(
+                er_res["story"]["segments"][-1]["text"],
+                'The innkeeper slides a mug across the oak bar and mutters, "Stay off the docks after midnight."',
+            )
+
+            # Undo restores the erased continuation segment
+            st, undo_res = self._req("POST", f"/api/stories/{story_id}/undo", {})
+            self.assertEqual(st, 200)
+            self.assertTrue(undo_res["undone"])
+            self.assertEqual(len(undo_res["story"]["segments"]), init_count + 3)
+            self.assertEqual(
+                undo_res["story"]["segments"][-1]["text"],
+                "A gust slams the shutters open.",
+            )
+        finally:
+            server.LLM_URL = orig_llm_url
+            llm.shutdown()
+            llm.server_close()
+
+    def test_aidungeon_script_compat_autocards_innerself(self):
+        # Simulate LewdLeah Auto-Cards / Inner-Self idioms:
+        # 1) Calling library helper before modifier(text), reading global `stop`, returning [text, stop]
+        # 2) Reading/mutating storyCards[i].value, .description, addStoryCard(..., description), updateStoryCard(..., description)
+        # 3) Accessing state.memory without pre-initialization and reading info.maxChars / history[].type
+        lib_code = """
+        function AutoCompat(hook, t, s) {
+          if (hook === 'input') {
+            state.seenInfo = {
+              hasMaxChars: typeof info.maxChars === 'number' && info.maxChars > 0,
+              hasMemLen: typeof info.memoryLength === 'number',
+              histStartType: history.length > 0 ? history[0].type : null,
+            };
+            // Verify state.memory exists by default without crashing
+            const prevMem = state.memory.context || '';
+            state.memory.context = prevMem ? prevMem : 'Active camp';
+            // Create card with description (5th arg) and mutate via .value
+            if (!storyCards.some((c) => c.title === 'Nera')) {
+              const idx = addStoryCard('nera', 'Old bio', 'Character', 'Nera', 'Config notes v1');
+              storyCards[idx].value = 'Updated Nera bio via .value';
+              updateStoryCard(idx, 'nera,mage', storyCards[idx].value, 'Character', 'Nera', 'Config notes v2');
+            }
+            return t;
+          }
+          if (hook === 'context') {
+            const lastSeg = history.length > 0 ? history[history.length - 1].text : '';
+            if (lastSeg.includes('HALT_CONTEXT')) {
+              state.message = 'Paused by context script';
+              return [t, true];
+            }
+            if (lastSeg.includes('HIJACK_CARD')) {
+              return ['<CARD_GEN_PROMPT>Create a card for Aldric</CARD_GEN_PROMPT>', false];
+            }
+            return [t + '\\n[InnerThoughts: watchful]', s];
+          }
+          if (hook === 'output') {
+            if (t.includes('CARD_JSON:')) {
+              addStoryCard({ keys: 'aldric', value: 'Aldric is a stern blacksmith.', type: 'Character', title: 'Aldric', description: 'Auto-generated' });
+              state.message = 'Auto-Cards created Aldric!';
+              return '';
+            }
+            return t;
+          }
+          return t;
+        }
+        """
+        input_code = """
+        const modifier = (text) => {
+          text = AutoCompat('input', text);
+          return { text };
+        };
+        modifier(text);
+        """
+        context_code = """
+        const modifier = (text) => {
+          [text, stop] = AutoCompat('context', text, stop);
+          return { text, stop };
+        };
+        modifier(text);
+        """
+        output_code = """
+        const modifier = (text) => {
+          text = AutoCompat('output', text);
+          return { text };
+        };
+        modifier(text);
+        """
+
+        _, story_res = self._req("POST", "/api/stories", {"scenario_id": "tavern"})
+        story_id = story_res["story"]["id"]
+        self._req(
+            "PATCH",
+            f"/api/stories/{story_id}",
+            {
+                "builtin_script": {
+                    "enabled": True,
+                    "library": lib_code,
+                    "input": input_code,
+                    "context": context_code,
+                    "output": output_code,
+                }
+            },
+        )
+
+        # Verify context script stop: true prevents LLM call cleanly while persisting user segment
+        captured_bodies = []
+
+        class CompatLLMHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length).decode("utf-8")
+                captured_bodies.append(json.loads(raw))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                last_msg = captured_bodies[-1]["messages"][-1]["content"]
+                reply = (
+                    "CARD_JSON: Aldric the blacksmith"
+                    if "<CARD_GEN_PROMPT>" in last_msg
+                    else "She nods slowly."
+                )
+                self.wfile.write(
+                    f"data: {json.dumps({'choices': [{'delta': {'content': reply}, 'finish_reason': 'stop'}]})}\n\n".encode("utf-8")
+                )
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+
+        mock_llm = ThreadingHTTPServer(("127.0.0.1", 0), CompatLLMHandler)
+        mock_thread = threading.Thread(target=mock_llm.serve_forever, daemon=True)
+        mock_thread.start()
+        orig_llm_url = server.LLM_URL
+        server.LLM_URL = f"http://127.0.0.1:{mock_llm.server_address[1]}"
+        try:
+            # Turn 1: HALT_CONTEXT -> context returns stop: true -> no LLM request fired
+            req1 = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/api/stories/{story_id}/generate",
+                data=json.dumps({"mode": "story", "text": "HALT_CONTEXT check"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req1, timeout=5) as resp:
+                sse1 = resp.read().decode("utf-8")
+            self.assertIn("Paused by context script", sse1)
+            self.assertEqual(len(captured_bodies), 0)
+
+            _, st1 = self._req("GET", f"/api/stories/{story_id}")
+            s1 = st1["story"]
+            self.assertTrue(s1["script_state"]["seenInfo"]["hasMaxChars"])
+            self.assertTrue(s1["script_state"]["seenInfo"]["hasMemLen"])
+            self.assertEqual(s1["script_state"]["seenInfo"]["histStartType"], "start")
+            self.assertEqual(s1["story_cards"][0]["entry"], "Updated Nera bio via .value")
+            self.assertEqual(s1["story_cards"][0]["description"], "Config notes v2")
+
+            # Turn 2: HIJACK_CARD -> wholesale prompt replacement omits RPG system prompt,
+            # output script turns response into Aldric Story Card and suppresses AI segment
+            req2 = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/api/stories/{story_id}/generate",
+                data=json.dumps({"mode": "story", "text": "HIJACK_CARD trigger"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req2, timeout=5) as resp:
+                resp.read()
+            self.assertEqual(len(captured_bodies), 1)
+            self.assertEqual(len(captured_bodies[0]["messages"]), 1)
+            self.assertEqual(
+                captured_bodies[0]["messages"][0]["content"],
+                "<CARD_GEN_PROMPT>Create a card for Aldric</CARD_GEN_PROMPT>",
+            )
+
+            _, st2 = self._req("GET", f"/api/stories/{story_id}")
+            s2 = st2["story"]
+            self.assertEqual(s2["script_state"]["message"], "Auto-Cards created Aldric!")
+            self.assertEqual(len(s2["story_cards"]), 2)
+            self.assertEqual(s2["story_cards"][1]["entry"], "Aldric is a stern blacksmith.")
+            self.assertEqual(s2["story_cards"][1]["description"], "Auto-generated")
+            self.assertEqual(s2["segments"][-1]["text"], "HIJACK_CARD trigger")
+        finally:
+            server.LLM_URL = orig_llm_url
+            mock_llm.shutdown()
+            mock_llm.server_close()
+
+    def test_multiple_choice_community_scripts_option(self):
+        orig_fetch = harness._fetch_community_source
+        fetch_calls = []
+
+        def fake_fetch(raw_base, filename, timeout=20):
+            fetch_calls.append((raw_base, filename))
+            if "Inner-Self" in raw_base:
+                if filename == "library.js":
+                    return "const MainSettings = { InnerSelf: { IS_AC_ENABLED_BY_DEFAULT: false } }; function InnerSelf() {}"
+                if filename == "context.js":
+                    return "InnerSelf('context'); const modifier = (text) => ({ text, stop }); modifier(text);"
+                return "const modifier = (text) => ({ text }); modifier(text);"
+            if filename == "library.js":
+                return "function AutoCards(h, t) { return h === 'context' ? [t, false] : t; }"
+            if filename == "context.js":
+                return "const modifier = (text) => { [text, stop] = AutoCards('context', text, stop); return { text, stop }; }; modifier(text);"
+            return "const modifier = (text) => ({ text }); modifier(text);"
+
+        harness._fetch_community_source = fake_fetch
+        try:
+            # 1. Create a Multiple Choice scenario
+            st, sc_res = self._req(
+                "POST",
+                "/api/scenarios",
+                {
+                    "name": "Guild Paths",
+                    "scenario_type": "multiple_choice",
+                    "choices": [
+                        {"id": "c_mage", "label": "Mage", "opening": "You enter the arcane tower."},
+                        {"id": "c_rogue", "label": "Rogue", "opening": "You slip into the alley."},
+                    ],
+                },
+            )
+            self.assertEqual(st, 201)
+            sc_id = sc_res["scenario"]["id"]
+
+            # 2. Start adventure with Auto-Cards only
+            st, s_ac = self._req(
+                "POST",
+                "/api/stories",
+                {"scenario_id": sc_id, "choice_id": "c_rogue", "enable_auto_cards": True},
+            )
+            self.assertEqual(st, 201)
+            self.assertEqual(s_ac["story"]["attached_scripts"], [{"script_id": "community-auto-cards", "enabled": True}])
+
+            # 3. Start adventure with BOTH Inner Self + Auto-Cards -> uses coordinated community-inner-self-ac
+            st, s_both = self._req(
+                "POST",
+                "/api/stories",
+                {
+                    "scenario_id": sc_id,
+                    "choice_id": "c_mage",
+                    "enable_inner_self": True,
+                    "enable_auto_cards": True,
+                },
+            )
+            self.assertEqual(st, 201)
+            self.assertEqual(
+                s_both["story"]["attached_scripts"],
+                [{"script_id": "community-inner-self-ac", "enabled": True}],
+            )
+            st, combo_res = self._req("GET", "/api/scripts/community-inner-self-ac")
+            self.assertEqual(st, 200)
+            self.assertIn("IS_AC_ENABLED_BY_DEFAULT: true", combo_res["script"]["library"])
+
+            # 4. Cached scripts require zero additional fetches on subsequent calls
+            count_before = len(fetch_calls)
+            st, inst_res = self._req("POST", "/api/scripts/install-community", {"kind": "inner_self"})
+            self.assertEqual(st, 200)
+            self.assertEqual(inst_res["script"]["id"], "community-inner-self")
+            self.assertEqual(len(fetch_calls), count_before)
+        finally:
+            harness._fetch_community_source = orig_fetch
+
 
 if __name__ == "__main__":
     unittest.main()

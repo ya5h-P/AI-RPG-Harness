@@ -89,6 +89,7 @@
 
           <div id="script-message-banner" class="script-message-banner hidden"></div>
           <div id="error-banner" class="error-banner hidden"></div>
+          <div id="segment-action-bar" class="segment-action-bar hidden"></div>
 
           <section class="composer">
             <div class="composer-top">
@@ -355,6 +356,15 @@
             <button type="button" id="btn-new-reusable-script" class="secondary-btn full-width">
               + Create New Reusable Script
             </button>
+
+            <div class="community-scripts-row">
+              <button type="button" id="btn-install-inner-self" class="chip-btn" title="Install & attach LewdLeah/Inner-Self">
+                + Inner Self (🎭)
+              </button>
+              <button type="button" id="btn-install-auto-cards" class="chip-btn" title="Install & attach LewdLeah/Auto-Cards">
+                + Auto-Cards
+              </button>
+            </div>
 
             <div id="story-attached-scripts-list" class="attached-scripts-list"></div>
 
@@ -687,7 +697,29 @@
             <h2 id="play-setup-title">Start Adventure</h2>
             <p id="play-setup-subtitle" class="modal-subtitle"></p>
           </div>
-          <button id="btn-close-play-setup" class="close-btn" aria-label="Close">×</button>
+          <div class="play-setup-header-actions">
+            <div class="play-setup-script-pills" role="group" aria-label="Optional Scripts">
+              <button
+                type="button"
+                id="btn-setup-inner-self"
+                class="setup-pill-btn"
+                aria-pressed="false"
+                title="Enable Inner Self (NPC memory, goals & self-reflection)"
+              >
+                🎭 Inner Self
+              </button>
+              <button
+                type="button"
+                id="btn-setup-auto-cards"
+                class="setup-pill-btn"
+                aria-pressed="false"
+                title="Enable Auto-Cards (auto-create & update Story Cards)"
+              >
+                ✨ Auto-Cards
+              </button>
+            </div>
+            <button id="btn-close-play-setup" class="close-btn" aria-label="Close">×</button>
+          </div>
         </div>
         <div id="play-setup-body" class="play-setup-body"></div>
         <div class="play-setup-footer">

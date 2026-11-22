@@ -39,6 +39,7 @@ from harness import (
     delete_scenario,
     delete_script,
     delete_story,
+    ensure_community_script,
     ensure_scenarios_dir,
     erase_last_segment,
     erase_to_here,
@@ -361,8 +362,28 @@ def start_llm_server() -> dict[str, Any]:
     }
 
 
+class RPGHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # Clients disconnecting mid-request (page reloads, closed tabs, phone
+        # sleeping, browser pre-connect sockets) is routine, not a server bug.
+        # socketserver otherwise dumps a full traceback for every occurrence.
+        exc = sys.exc_info()[1]
+        if isinstance(
+            exc,
+            (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError),
+        ):
+            return
+        super().handle_error(request, client_address)
+
+
 class RPGRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Don't keep idle keep-alive connections open forever; browsers (especially
+    # mobile ones over Tailscale) open speculative sockets and drop them.
+    timeout = 30
 
     def log_message(self, format: str, *args: Any) -> None:
         # Keep terminal output clean; log errors or API calls concisely.
@@ -577,6 +598,20 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, res)
             return
 
+        if path == "/api/scripts/install-community":
+            kind = str(body.get("kind") or "")
+            include_ac = bool(body.get("include_ac", False))
+            try:
+                sc = ensure_community_script(kind, include_ac=include_ac)
+            except ValueError as e:
+                self._send_error_json(400, str(e))
+                return
+            except Exception as e:
+                self._send_error_json(502, str(e))
+                return
+            self._send_json(200, {"script": sc.to_dict()})
+            return
+
         if path == "/api/scripts":
             name = str(body.get("name") or "").strip()
             if not name:
@@ -669,15 +704,21 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                 if isinstance(body.get("choice_path"), list)
                 else None
             )
-            story = create_story_from_scenario(
-                scenario_id=scenario_id,
-                title=title,
-                choice_id=str(choice_id) if choice_id else None,
-                choice_path=choice_path,
-                placeholder_answers=placeholder_answers,
-                selected_card_ids=[str(x) for x in selected_card_ids] if selected_card_ids else None,
-                quickstart=bool(body.get("quickstart", False)),
-            )
+            try:
+                story = create_story_from_scenario(
+                    scenario_id=scenario_id,
+                    title=title,
+                    choice_id=str(choice_id) if choice_id else None,
+                    choice_path=choice_path,
+                    placeholder_answers=placeholder_answers,
+                    selected_card_ids=[str(x) for x in selected_card_ids] if selected_card_ids else None,
+                    quickstart=bool(body.get("quickstart", False)),
+                    enable_inner_self=bool(body.get("enable_inner_self", False)),
+                    enable_auto_cards=bool(body.get("enable_auto_cards", False)),
+                )
+            except RuntimeError as e:
+                self._send_error_json(502, str(e))
+                return
             if "plot_essentials" in body and body["plot_essentials"] is not None:
                 story.plot_essentials = str(body["plot_essentials"])
             save_story(story)
@@ -1263,6 +1304,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                 )
                 save_story(story)
 
+            context_stopped = False
             if not input_stopped:
                 plan = build_context_plan(
                     story,
@@ -1272,6 +1314,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                     retry_instructions=retry_instructions,
                     previous_draft=previous_draft,
                 )
+                context_stopped = bool(plan.get("script_stop"))
                 messages = plan["messages"]
                 settings = story.settings
                 story.last_generation_context = {
@@ -1296,7 +1339,9 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
-        if input_stopped:
+        if input_stopped or context_stopped:
+            if user_seg is not None:
+                self._send_sse_event("user_segment", {"segment": user_seg.__dict__})
             self._send_sse_event("done", {"segment": None, "reasoning": "", "story": story.to_dict()})
             return
 
@@ -1328,11 +1373,48 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             enable_thinking=settings.enable_thinking,
         )
 
+        is_continue = (
+            user_seg is None
+            and not retry
+            and not guide_text.strip()
+        )
+        is_continue_ai = (
+            is_continue
+            and bool(story.segments)
+            and story.segments[-1].kind == "ai"
+            and not settings.raw_model_output
+        )
+        continue_recent = (
+            [s.text for s in story.segments[-4:] if s.text.strip()]
+            if is_continue_ai
+            else []
+        )
+        prefix_flushed = not is_continue_ai
+        pre_removed_sentences: list[str] = []
+
         conn: http.client.HTTPConnection | None = None
         collected_tokens: list[str] = []
         collected_reasoning: list[str] = []
         finish_reason: str | None = None
         client_disconnected = False
+
+        def _flush_continue_prefix() -> None:
+            nonlocal prefix_flushed, collected_tokens, pre_removed_sentences
+            if prefix_flushed:
+                return
+            prefix_flushed = True
+            raw_prefix = "".join(collected_tokens)
+            cleaned_prefix, pre_removed = remove_repeated_leading_sentences(
+                raw_prefix, continue_recent
+            )
+            if pre_removed:
+                pre_removed_sentences.extend(pre_removed)
+                collected_tokens = [cleaned_prefix] if cleaned_prefix else []
+                out_tok = cleaned_prefix
+            else:
+                out_tok = raw_prefix
+            if out_tok:
+                self._send_sse_event("token", {"token": out_tok})
 
         try:
             conn_cls = (
@@ -1386,7 +1468,14 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                 tok = delta.get("content")
                 if tok:
                     collected_tokens.append(tok)
-                    self._send_sse_event("token", {"token": tok})
+                    if not prefix_flushed:
+                        if len("".join(collected_tokens)) >= 100:
+                            _flush_continue_prefix()
+                    else:
+                        self._send_sse_event("token", {"token": tok})
+
+            if not prefix_flushed and collected_tokens:
+                _flush_continue_prefix()
 
         except (BrokenPipeError, ConnectionResetError):
             client_disconnected = True
@@ -1414,7 +1503,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
         full_text = "".join(collected_tokens).strip()
         if full_text and finish_reason == "length" and not settings.raw_model_output:
             full_text = trim_incomplete_sentence(full_text)
-        removed_sentences: list[str] = []
+        removed_sentences: list[str] = list(pre_removed_sentences)
         ai_seg: Segment | None = None
         if not client_disconnected:
             with get_story_lock(story_id):
@@ -1422,9 +1511,11 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                 if latest is not None:
                     if full_text and not latest.settings.raw_model_output:
                         recent_texts = [s.text for s in latest.segments[-4:] if s.text.strip()]
-                        full_text, removed_sentences = remove_repeated_leading_sentences(
+                        full_text, post_removed = remove_repeated_leading_sentences(
                             full_text, recent_texts
                         )
+                        if post_removed:
+                            removed_sentences.extend(post_removed)
                         if removed_sentences and isinstance(latest.last_generation_context, dict):
                             latest.last_generation_context["removed_context"] = removed_sentences
                     out_res = run_story_scripts(latest, "output", full_text)
@@ -1622,7 +1713,7 @@ def main() -> None:
     servers: list[ThreadingHTTPServer] = []
     threads: list[threading.Thread] = []
     for host in bind_hosts:
-        srv = ThreadingHTTPServer((host, APP_PORT), RPGRequestHandler)
+        srv = RPGHTTPServer((host, APP_PORT), RPGRequestHandler)
         servers.append(srv)
         print(f"AI RPG Harness listening on http://{host}:{APP_PORT}", flush=True)
 

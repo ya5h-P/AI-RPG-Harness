@@ -6,17 +6,12 @@ LLM_PORT="${LLM_PORT:-8080}"
 APP_PORT="${PORT:-7860}"
 PID_FILE="$ROOT/.server.pid"
 
-LLAMA_SCRIPT="${LLAMA_SERVE_SCRIPT:-}"
-if [[ -z "$LLAMA_SCRIPT" && -f "$(dirname "$ROOT")/llama.cpp/serve-gemma4-26b-96k.sh" ]]; then
-  LLAMA_SCRIPT="$(dirname "$ROOT")/llama.cpp/serve-gemma4-26b-96k.sh"
-fi
-
 usage() {
   cat <<EOF
 Usage: ./start.sh [command|options]
 
 Commands:
-  (default)        Start Web UI in foreground (and LLAMA_SERVE_SCRIPT if configured)
+  (default)        Start Web UI in foreground
   --tailscale      Also bind Tailscale IP so you can play from your phone
   --bg             Start in background (writes logs/server.log + .server.pid)
   status           Check LLM server and Web UI health + print URLs
@@ -27,7 +22,7 @@ Commands:
 Options:
   Combine --bg with --tailscale (e.g. ./start.sh --bg --tailscale).
   Env vars: PORT (7860), HOST (127.0.0.1), LLM_URL (http://127.0.0.1:8080),
-            LLM_PORT (8080), LLAMA_SERVE_SCRIPT
+            LLM_PORT (8080)
 EOF
 }
 
@@ -105,21 +100,7 @@ done
 
 mkdir -p "$ROOT/logs"
 
-ensure_llama() {
-  local llm_base="${LLM_URL:-http://127.0.0.1:${LLM_PORT}}"
-  if curl -sf "${llm_base%/}/health" >/dev/null 2>&1 || curl -sf "${llm_base%/}/v1/models" >/dev/null 2>&1; then
-    echo "LLM server already running at ${llm_base}"
-  elif [[ -n "$LLAMA_SCRIPT" && -f "$LLAMA_SCRIPT" ]]; then
-    echo "Starting LLM via ${LLAMA_SCRIPT}..."
-    nohup bash "$LLAMA_SCRIPT" >"$ROOT/logs/llama-server.log" 2>&1 &
-    echo "LLM server starting (PID $!, logs: $ROOT/logs/llama-server.log)"
-  else
-    echo "No local LLAMA_SERVE_SCRIPT configured; expecting an OpenAI-compatible LLM server at ${llm_base}"
-  fi
-}
-
 if [[ "$BG_MODE" -eq 1 ]]; then
-  ensure_llama
   cmd_stop >/dev/null 2>&1 || true
   nohup env PORT="$APP_PORT" python3 "$ROOT/server.py" "${SERVER_ARGS[@]}" >"$ROOT/logs/server.log" 2>&1 &
   echo $! >"$PID_FILE"
@@ -127,27 +108,6 @@ if [[ "$BG_MODE" -eq 1 ]]; then
   cmd_status
   echo "Logs: $ROOT/logs/server.log"
   exit 0
-fi
-
-LLAMA_PID=""
-cleanup() {
-  if [[ -n "$LLAMA_PID" ]] && kill -0 "$LLAMA_PID" 2>/dev/null; then
-    echo "Stopping LLM server (PID $LLAMA_PID)..."
-    kill "$LLAMA_PID" 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT INT TERM
-
-llm_base="${LLM_URL:-http://127.0.0.1:${LLM_PORT}}"
-if curl -sf "${llm_base%/}/health" >/dev/null 2>&1 || curl -sf "${llm_base%/}/v1/models" >/dev/null 2>&1; then
-  echo "LLM server already running at ${llm_base}"
-elif [[ -n "$LLAMA_SCRIPT" && -f "$LLAMA_SCRIPT" ]]; then
-  echo "Starting LLM via ${LLAMA_SCRIPT}..."
-  bash "$LLAMA_SCRIPT" >"$ROOT/logs/llama-server.log" 2>&1 &
-  LLAMA_PID=$!
-  echo "LLM server starting (PID $LLAMA_PID, logs: $ROOT/logs/llama-server.log)"
-else
-  echo "No local LLAMA_SERVE_SCRIPT configured; expecting an OpenAI-compatible LLM server at ${llm_base}"
 fi
 
 echo "Starting AI RPG Harness web UI on port ${APP_PORT}..."

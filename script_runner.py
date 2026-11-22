@@ -22,37 +22,144 @@ const sandboxConsole = {
   error: (...args) => logs.push("[error] " + args.map(formatArg).join(" ")),
 };
 
-const storyCards = Array.isArray(input.storyCards)
-  ? input.storyCards.map((c) => ({ ...c }))
-  : [];
+const initState = input.state && typeof input.state === "object" ? input.state : {};
+const hadInitialMemory = Boolean(initState.memory && typeof initState.memory === "object");
+if (!hadInitialMemory) {
+  initState.memory = {};
+}
 
-const addStoryCard = (keys, entry, type = "Custom", title = "") => {
-  const kStr = String(keys || "");
-  if (kStr && storyCards.some((c) => String(c.keys || "") === kStr)) {
-    return false;
-  }
+const makeCompatCard = (raw) => {
+  const src = raw && typeof raw === "object" ? raw : {};
+  let entryVal = String(src.entry ?? src.value ?? "");
+  let typeVal = String(src.type ?? src.card_type ?? "Custom");
   const card = {
-    id: Math.random().toString(16).slice(2, 12),
-    title: String(title || keys || "Card"),
-    type: String(type || "Custom"),
-    card_type: String(type || "Custom"),
-    keys: kStr,
-    entry: String(entry || ""),
+    id: String(src.id || Math.random().toString(16).slice(2, 12)),
+    title: String(src.title ?? src.keys ?? "Card"),
+    keys: String(src.keys ?? ""),
+    description: String(src.description ?? ""),
+    is_pinned: Boolean(src.is_pinned ?? src.isPinned ?? false),
+    isPinned: Boolean(src.isPinned ?? src.is_pinned ?? false),
+    use_for_character_creation: Boolean(src.use_for_character_creation ?? src.useForCharacterCreation ?? false),
+    useForCharacterCreation: Boolean(src.useForCharacterCreation ?? src.use_for_character_creation ?? false),
+    _origEntry: entryVal,
   };
-  storyCards.push(card);
-  return storyCards.length - 1;
+  Object.defineProperty(card, "entry", {
+    enumerable: true,
+    configurable: true,
+    get: () => entryVal,
+    set: (v) => { entryVal = String(v ?? ""); },
+  });
+  Object.defineProperty(card, "value", {
+    enumerable: true,
+    configurable: true,
+    get: () => entryVal,
+    set: (v) => { entryVal = String(v ?? ""); },
+  });
+  Object.defineProperty(card, "type", {
+    enumerable: true,
+    configurable: true,
+    get: () => typeVal,
+    set: (v) => { typeVal = String(v ?? "Custom"); },
+  });
+  Object.defineProperty(card, "card_type", {
+    enumerable: true,
+    configurable: true,
+    get: () => typeVal,
+    set: (v) => { typeVal = String(v ?? "Custom"); },
+  });
+  return card;
 };
 
-const updateStoryCard = (index, keys, entry, type, title) => {
+const serializeCompatCard = (raw) => {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const orig = typeof src._origEntry === "string" ? src._origEntry : null;
+  let entryVal = src.entry;
+  if (orig !== null && src.value !== undefined && String(src.value) !== orig && String(src.entry ?? "") === orig) {
+    entryVal = String(src.value);
+  } else if (entryVal === undefined) {
+    entryVal = src.value;
+  }
+  const typeVal = src.type ?? src.card_type ?? "Custom";
+  return {
+    id: String(src.id || Math.random().toString(16).slice(2, 12)),
+    title: String(src.title ?? src.keys ?? "Card"),
+    type: String(typeVal),
+    card_type: String(typeVal),
+    keys: String(src.keys ?? ""),
+    entry: String(entryVal ?? ""),
+    value: String(entryVal ?? ""),
+    description: String(src.description ?? ""),
+    is_pinned: Boolean(src.is_pinned ?? src.isPinned ?? false),
+    use_for_character_creation: Boolean(src.use_for_character_creation ?? src.useForCharacterCreation ?? false),
+  };
+};
+
+const storyCards = Array.isArray(input.storyCards)
+  ? input.storyCards.map(makeCompatCard)
+  : [];
+
+const addStoryCard = (keys, entry, type = "Custom", title = "", description = "", options = null) => {
+  let opts = options && typeof options === "object" ? options : null;
+  let kVal = keys;
+  let eVal = entry;
+  let tVal = type;
+  let tiVal = title;
+  let dVal = description;
+  if (kVal && typeof kVal === "object" && !Array.isArray(kVal)) {
+    opts = kVal;
+    kVal = opts.keys ?? "";
+    eVal = opts.entry ?? opts.value ?? "";
+    tVal = opts.type ?? opts.card_type ?? "Custom";
+    tiVal = opts.title ?? "";
+    dVal = opts.description ?? "";
+  } else if (tVal && typeof tVal === "object") {
+    opts = tVal;
+    tVal = opts.type ?? "Custom";
+  } else if (tiVal && typeof tiVal === "object") {
+    opts = tiVal;
+    tiVal = opts.title ?? "";
+  } else if (dVal && typeof dVal === "object") {
+    opts = dVal;
+    dVal = opts.description ?? "";
+  }
+  const kStr = String(kVal || "");
+  if (kStr && !opts?.allowDuplicate && storyCards.some((c) => String(c.keys || "") === kStr)) {
+    return false;
+  }
+  const card = makeCompatCard({
+    id: Math.random().toString(16).slice(2, 12),
+    title: String(tiVal || kStr || "Card"),
+    type: String(tVal || "Custom"),
+    keys: kStr,
+    entry: String(eVal || ""),
+    description: String(dVal || ""),
+  });
+  storyCards.push(card);
+  return opts && opts.returnCard ? card : storyCards.length - 1;
+};
+
+const updateStoryCard = (index, keys, entry, type, title, description) => {
   const i = Number(index);
   if (!Number.isInteger(i) || i < 0 || i >= storyCards.length) {
     throw new Error(`Story card index out of range: ${index}`);
   }
   const c = storyCards[i];
+  if (keys && typeof keys === "object" && !Array.isArray(keys)) {
+    const patch = keys;
+    if (patch.keys !== undefined) c.keys = String(patch.keys);
+    if (patch.entry !== undefined) c.entry = String(patch.entry);
+    else if (patch.value !== undefined) c.value = String(patch.value);
+    if (patch.type !== undefined) c.type = String(patch.type);
+    else if (patch.card_type !== undefined) c.type = String(patch.card_type);
+    if (patch.title !== undefined) c.title = String(patch.title);
+    if (patch.description !== undefined) c.description = String(patch.description);
+    return true;
+  }
   if (keys !== undefined) c.keys = String(keys);
   if (entry !== undefined) c.entry = String(entry);
-  if (type !== undefined) { c.type = String(type); c.card_type = String(type); }
+  if (type !== undefined) c.type = String(type);
   if (title !== undefined) c.title = String(title);
+  if (description !== undefined) c.description = String(description);
   return true;
 };
 
@@ -67,7 +174,8 @@ const removeStoryCard = (index) => {
 
 const sandbox = {
   text: input.text,
-  state: input.state && typeof input.state === "object" ? input.state : {},
+  stop: Boolean(input.stop),
+  state: initState,
   info: input.info && typeof input.info === "object" ? input.info : {},
   history: Array.isArray(input.history) ? input.history : [],
   storyCards,
@@ -97,18 +205,22 @@ const sandbox = {
   parseFloat,
   isNaN,
   isFinite,
+  encodeURIComponent,
+  decodeURIComponent,
+  encodeURI,
+  decodeURI,
 };
 
 const ctx = vm.createContext(sandbox);
 
 try {
   if (input.library && input.library.trim()) {
-    vm.runInContext(input.library, ctx, { timeout: 1500, filename: "library.js" });
+    vm.runInContext(input.library, ctx, { timeout: 2500, filename: "library.js" });
   }
-  const result = vm.runInContext(input.code, ctx, { timeout: 2000, filename: `${input.hook || "hook"}.js` });
+  const result = vm.runInContext(input.code, ctx, { timeout: 3000, filename: `${input.hook || "hook"}.js` });
 
   let outText = sandbox.text;
-  let stop = false;
+  let stop = Boolean(sandbox.stop);
   if (result && typeof result === "object") {
     if ("text" in result) outText = result.text;
     if ("stop" in result) stop = Boolean(result.stop);
@@ -116,23 +228,30 @@ try {
     outText = result;
   }
 
+  if (!hadInitialMemory && sandbox.state && typeof sandbox.state.memory === "object" && Object.keys(sandbox.state.memory).length === 0) {
+    delete sandbox.state.memory;
+  }
+
   process.stdout.write(JSON.stringify({
     ok: true,
     text: outText,
     stop,
     state: sandbox.state,
-    storyCards: sandbox.storyCards,
+    storyCards: Array.isArray(sandbox.storyCards) ? sandbox.storyCards.map(serializeCompatCard) : [],
     quests: sandbox.quests,
     logs,
   }));
 } catch (err) {
+  if (!hadInitialMemory && sandbox.state && typeof sandbox.state.memory === "object" && Object.keys(sandbox.state.memory).length === 0) {
+    delete sandbox.state.memory;
+  }
   process.stdout.write(JSON.stringify({
     ok: false,
     error: err && err.stack ? String(err.stack).split("\n").slice(0, 4).join("\n") : String(err),
     text: input.text,
     stop: false,
     state: sandbox.state,
-    storyCards: sandbox.storyCards,
+    storyCards: Array.isArray(sandbox.storyCards) ? sandbox.storyCards.map(serializeCompatCard) : [],
     quests: sandbox.quests,
     logs,
   }));
@@ -182,7 +301,7 @@ def run_js_hook(
             input=json.dumps(payload),
             text=True,
             capture_output=True,
-            timeout=3.5,
+            timeout=6.0,
         )
     except subprocess.TimeoutExpired:
         return {
