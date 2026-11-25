@@ -1926,6 +1926,71 @@ class TestServerAPI(unittest.TestCase):
         self.assertNotIn("Continue immediately after the player's action/dialogue above", prior_say_user)
         self.assertIn("Continue immediately after the player's action/dialogue above", msgs2[-1]["content"])
 
+    def test_thinking_tokens_do_not_count_toward_max_tokens(self):
+        _, created = self._req("POST", "/api/stories", {"scenario_id": "tavern"})
+        story_id = created["story"]["id"]
+        self._req(
+            "PATCH",
+            f"/api/stories/{story_id}",
+            {"settings": {"max_tokens": 12, "reasoning_effort": "medium", "enable_thinking": True}},
+        )
+
+        captured_payloads = []
+
+        class MockThinkingLLMHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                captured_payloads.append(body)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                chunks = [
+                    {"choices": [{"delta": {"reasoning_content": "Let me think carefully about every detail here. " * 4}}]},
+                    {"choices": [{"delta": {"content": "The door creaks open. "}}]},
+                    {"choices": [{"delta": {"content": "A cold draft sweeps across the floorboards. "}}]},
+                    {"choices": [{"delta": {"content": "This extra sentence should be cut off after max_tokens."}}]},
+                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                ]
+                for chunk in chunks:
+                    try:
+                        self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                try:
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, fmt, *args):
+                pass
+
+        mock_llm = ThreadingHTTPServer(("127.0.0.1", 0), MockThinkingLLMHandler)
+        mock_port = mock_llm.server_address[1]
+        threading.Thread(target=mock_llm.serve_forever, daemon=True).start()
+        orig_llm_url = server.LLM_URL
+        server.LLM_URL = f"http://127.0.0.1:{mock_port}"
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/api/stories/{story_id}/generate",
+                data=json.dumps({"mode": "do", "text": "open the door"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw_sse = resp.read().decode("utf-8")
+
+            self.assertGreater(captured_payloads[0]["max_tokens"], 12)
+            self.assertIn("event: reasoning", raw_sse)
+            self.assertIn("The door creaks open.", raw_sse)
+            self.assertNotIn("This extra sentence should be cut off", raw_sse)
+        finally:
+            server.LLM_URL = orig_llm_url
+            mock_llm.shutdown()
+            mock_llm.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

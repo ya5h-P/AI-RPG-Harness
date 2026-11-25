@@ -43,6 +43,7 @@ from harness import (
     ensure_scenarios_dir,
     erase_last_segment,
     erase_to_here,
+    estimate_tokens,
     export_adventure_zip,
     export_story_cards_aidungeon,
     fetch_aidungeon_url_payload,
@@ -159,6 +160,30 @@ def _resolve_model_name(cfg: dict[str, Any]) -> str:
     return "default"
 
 
+_THINKING_HEADROOM: dict[str, int] = {
+    "low": 1024,
+    "medium": 2048,
+    "high": 4096,
+    "xhigh": 8192,
+}
+
+
+def _effective_upstream_max_tokens(
+    max_tokens: int,
+    effort: str,
+    *,
+    available_context_tokens: int | None = None,
+) -> int:
+    """Reserve extra upstream max_tokens for thinking so reasoning does not eat output budget."""
+    if effort == "off":
+        return max_tokens
+    headroom = max(_THINKING_HEADROOM.get(effort, 2048), max_tokens)
+    upstream = max_tokens + headroom
+    if available_context_tokens is not None:
+        upstream = min(upstream, max(max_tokens, available_context_tokens))
+    return upstream
+
+
 def _build_chat_payload(
     cfg: dict[str, Any],
     messages: list[dict[str, Any]],
@@ -173,17 +198,23 @@ def _build_chat_payload(
     frequency_penalty: float | None = None,
     enable_thinking: bool = False,
     reasoning_effort: str = "off",
+    available_context_tokens: int | None = None,
 ) -> dict[str, Any]:
     effort = (reasoning_effort or ("medium" if enable_thinking else "off")).strip().lower()
     if effort not in ("off", "low", "medium", "high", "xhigh"):
         effort = "medium" if enable_thinking else "off"
     thinking_on = effort != "off"
+    upstream_max_tokens = _effective_upstream_max_tokens(
+        max_tokens,
+        effort,
+        available_context_tokens=available_context_tokens,
+    )
     payload: dict[str, Any] = {
         "model": _resolve_model_name(cfg),
         "messages": messages,
         "stream": stream,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": upstream_max_tokens,
     }
     if top_p is not None:
         payload["top_p"] = top_p
@@ -1602,6 +1633,13 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         req_path = (parsed.path or "/v1/chat/completions") + (f"?{parsed.query}" if parsed.query else "")
 
+        prompt_tokens_est = sum(estimate_tokens(str(m.get("content") or "")) + 4 for m in messages)
+        available_ctx_tokens: int | None = None
+        if not input_stopped and not context_stopped:
+            ctx_lim = int(plan.get("context_limit") or 0)
+            if ctx_lim > 0:
+                available_ctx_tokens = max(settings.max_tokens, ctx_lim - prompt_tokens_est - 64)
+
         payload = _build_chat_payload(
             cfg,
             messages,
@@ -1615,6 +1653,10 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             frequency_penalty=settings.frequency_penalty,
             enable_thinking=settings.enable_thinking,
             reasoning_effort=settings.reasoning_effort,
+            available_context_tokens=available_ctx_tokens,
+        )
+        thinking_on = bool(payload.get("chat_template_kwargs", {}).get("enable_thinking")) or (
+            str(payload.get("reasoning_effort") or "off").lower() != "off"
         )
 
         is_continue = (
@@ -1717,6 +1759,9 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                             _flush_continue_prefix()
                     else:
                         self._send_sse_event("token", {"token": tok})
+                    if thinking_on and estimate_tokens("".join(collected_tokens)) >= settings.max_tokens:
+                        finish_reason = "length"
+                        break
 
             if not prefix_flushed and collected_tokens:
                 _flush_continue_prefix()
