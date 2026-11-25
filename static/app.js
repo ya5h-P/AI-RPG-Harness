@@ -5,6 +5,9 @@
     scripts: [],
     defaultAiInstructions: "",
     llmReady: false,
+    llmMaxContext: null,
+    llmMaxContextSource: null,
+    llmThinkingMode: "none",
     currentStory: null,
     mode: "do",
     isGenerating: false,
@@ -137,13 +140,22 @@
     settingRepeatPenalty: document.getElementById("setting-repeat-penalty"),
     settingPresencePenalty: document.getElementById("setting-presence-penalty"),
     settingFrequencyPenalty: document.getElementById("setting-frequency-penalty"),
+    settingContextLengthSlider: document.getElementById("setting-context-length-slider"),
     settingContextLength: document.getElementById("setting-context-length"),
+    settingContextMaxLabel: document.getElementById("setting-context-max-label"),
     settingAutoSummarize: document.getElementById("setting-auto-summarize"),
     settingMemoryBank: document.getElementById("setting-memory-bank"),
     settingRawOutput: document.getElementById("setting-raw-output"),
     settingFollowLatest: document.getElementById("setting-follow-latest"),
+    settingThinkingToggleRow: document.getElementById("setting-thinking-toggle-row"),
     settingThinking: document.getElementById("setting-thinking"),
-    btnSaveSettings: document.getElementById("btn-save-settings"),
+    settingEffortControl: document.getElementById("setting-effort-control"),
+    settingReasoningEffort: document.getElementById("setting-reasoning-effort"),
+    settingEffortBadge: document.getElementById("setting-effort-badge"),
+    settingEffortFill: document.getElementById("setting-effort-fill"),
+    settingEffortDesc: document.getElementById("setting-effort-desc"),
+    effortStops: Array.from(document.querySelectorAll(".effort-stop")),
+    settingsSaveStatus: document.getElementById("settings-save-status"),
 
     btnContext: document.getElementById("btn-context"),
     btnContextNext: document.getElementById("btn-context-next"),
@@ -826,12 +838,16 @@
     els.settingRepeatPenalty.value = s.settings?.repeat_penalty ?? 1.05;
     els.settingPresencePenalty.value = s.settings?.presence_penalty ?? 0;
     els.settingFrequencyPenalty.value = s.settings?.frequency_penalty ?? 0;
-    els.settingContextLength.value = s.settings?.context_length ?? 16384;
+    syncContextLengthControls(s.settings?.context_length ?? 16384);
     els.settingAutoSummarize.checked = Boolean(s.settings?.auto_summarize);
     els.settingMemoryBank.checked = Boolean(s.settings?.memory_bank_enabled);
     els.settingRawOutput.checked = Boolean(s.settings?.raw_model_output);
     els.settingFollowLatest.checked = s.settings?.follow_latest_text !== false;
-    els.settingThinking.checked = Boolean(s.settings?.enable_thinking);
+    const effort = normalizeReasoningEffort(
+      s.settings?.reasoning_effort,
+      s.settings?.enable_thinking
+    );
+    syncReasoningEffortUI(effort);
   }
 
   async function cycleRetryVariant(dir, variantIdx = null) {
@@ -1215,6 +1231,7 @@
     state.activeView = isPlay ? "play" : "home";
     els.homeView.classList.toggle("hidden", isPlay);
     els.stageView.classList.toggle("hidden", !isPlay);
+    els.llmPill.classList.toggle("hidden", !isPlay);
     els.btnHome.classList.toggle("hidden", !isPlay);
     els.homeBrand.classList.toggle("hidden", isPlay);
     els.storyTitle.classList.toggle("hidden", !isPlay);
@@ -1263,15 +1280,6 @@
       const actions = document.createElement("div");
       actions.className = "home-card-actions";
 
-      const playBtn = document.createElement("button");
-      playBtn.type = "button";
-      playBtn.className = "primary-btn";
-      playBtn.textContent = "Continue";
-      playBtn.onclick = (e) => {
-        e.stopPropagation();
-        loadStoryById(item.id);
-      };
-
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "ghost-btn del";
@@ -1281,7 +1289,7 @@
         await deleteStoryById(item.id);
       };
 
-      actions.append(playBtn, delBtn);
+      actions.append(delBtn);
       card.append(head, preview, actions);
       els.homeAdventuresGrid.appendChild(card);
     }
@@ -1527,7 +1535,10 @@
       : sc.opening || "(No opening message)";
 
     const card = document.createElement("div");
-    card.className = isHome ? "home-card" : "scenario-card";
+    card.className = isHome ? "home-card clickable" : "scenario-card";
+    if (isHome) {
+      card.onclick = () => initiatePlayScenario(sc);
+    }
 
     if (isHome) {
       const head = document.createElement("div");
@@ -1554,12 +1565,6 @@
     const actions = document.createElement("div");
     actions.className = isHome ? "home-card-actions" : "scenario-card-actions";
 
-    const playBtn = document.createElement("button");
-    playBtn.type = "button";
-    playBtn.className = "primary-btn";
-    playBtn.textContent = "Play";
-    playBtn.onclick = () => initiatePlayScenario(sc);
-
     const rightBtns = document.createElement("div");
     rightBtns.className = isHome ? "home-card-btns" : "";
     if (!isHome) rightBtns.style.display = "contents";
@@ -1568,7 +1573,8 @@
     editBtn.type = "button";
     editBtn.className = "ghost-btn";
     editBtn.textContent = "Edit";
-    editBtn.onclick = () => {
+    editBtn.onclick = (e) => {
+      e.stopPropagation();
       loadScenarioIntoEditor(sc);
       if (isHome) openScenarioModal();
       els.scenarioNameInput.focus();
@@ -1578,7 +1584,8 @@
     delBtn.type = "button";
     delBtn.className = "ghost-btn del";
     delBtn.textContent = "Delete";
-    delBtn.onclick = async () => {
+    delBtn.onclick = async (e) => {
+      e.stopPropagation();
       await api(`/api/scenarios/${encodeURIComponent(sc.id)}`, { method: "DELETE" });
       if (state.editingScenarioId === sc.id) {
         resetScenarioForm();
@@ -1587,7 +1594,16 @@
     };
 
     rightBtns.append(editBtn, delBtn);
-    actions.append(playBtn, rightBtns);
+    if (!isHome) {
+      const playBtn = document.createElement("button");
+      playBtn.type = "button";
+      playBtn.className = "primary-btn";
+      playBtn.textContent = "Play";
+      playBtn.onclick = () => initiatePlayScenario(sc);
+      actions.append(playBtn, rightBtns);
+    } else {
+      actions.append(rightBtns);
+    }
     card.append(opening, actions);
     return card;
   }
@@ -2702,25 +2718,174 @@
 
   let epClearKeyFlag = false;
 
+  const REASONING_EFFORTS = [
+    {
+      key: "off",
+      desc: "No reasoning tokens; fastest response and natural prose",
+    },
+    {
+      key: "low",
+      desc: "Light reasoning for quick consistency checks",
+    },
+    {
+      key: "medium",
+      desc: "Balanced speed and reasoning quality for most tasks",
+    },
+    {
+      key: "high",
+      desc: "Deeper reasoning for complex scenes and strict rules",
+    },
+    {
+      key: "xhigh",
+      desc: "Maximum reasoning depth; slower turns",
+    },
+  ];
+
+  function normalizeReasoningEffort(effort, enableThinking = false) {
+    if (typeof effort === "string") {
+      const norm = effort.trim().toLowerCase();
+      if (REASONING_EFFORTS.some((e) => e.key === norm)) return norm;
+    }
+    return enableThinking ? "medium" : "off";
+  }
+
+  function syncReasoningEffortUI(effortKey) {
+    const idx = Math.max(
+      0,
+      REASONING_EFFORTS.findIndex((e) => e.key === effortKey)
+    );
+    const item = REASONING_EFFORTS[idx];
+    if (els.settingThinking) {
+      els.settingThinking.checked = idx > 0;
+    }
+    if (els.settingReasoningEffort) {
+      els.settingReasoningEffort.value = String(idx);
+    }
+    if (els.settingEffortBadge) {
+      els.settingEffortBadge.textContent = item.key;
+    }
+    if (els.settingEffortFill) {
+      const pct = (idx / (REASONING_EFFORTS.length - 1)) * 100;
+      els.settingEffortFill.style.width = `${pct}%`;
+    }
+    if (els.settingEffortDesc) {
+      els.settingEffortDesc.textContent = item.desc;
+    }
+    els.effortStops.forEach((btn, i) => {
+      btn.classList.toggle("active", i === idx);
+      btn.classList.toggle("passed", i < idx);
+    });
+  }
+
+  function renderThinkingControlVisibility() {
+    const mode = state.llmThinkingMode || "none";
+    if (els.settingThinkingToggleRow) {
+      els.settingThinkingToggleRow.classList.toggle("hidden", mode !== "toggle");
+    }
+    if (els.settingEffortControl) {
+      els.settingEffortControl.classList.toggle("hidden", mode !== "effort");
+    }
+  }
+
+  const DEFAULT_MAX_CONTEXT_LENGTH = 131072;
+
+  function getContextMaxLimit() {
+    if (
+      typeof state.llmMaxContext === "number" &&
+      Number.isFinite(state.llmMaxContext) &&
+      state.llmMaxContext >= 1024
+    ) {
+      return Math.floor(state.llmMaxContext);
+    }
+    return DEFAULT_MAX_CONTEXT_LENGTH;
+  }
+
+  function clampContextLength(rawVal) {
+    const maxCtx = getContextMaxLimit();
+    const parsed = Number(rawVal);
+    const val = Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 16384;
+    return Math.max(1024, Math.min(maxCtx, val));
+  }
+
+  function syncContextLengthControls(rawVal = null) {
+    const maxCtx = getContextMaxLimit();
+    const sliderStep = maxCtx >= 262144 ? 4096 : maxCtx >= 65536 ? 1024 : 512;
+    if (els.settingContextLengthSlider) {
+      els.settingContextLengthSlider.max = String(maxCtx);
+      els.settingContextLengthSlider.step = String(sliderStep);
+    }
+    if (els.settingContextLength) {
+      els.settingContextLength.max = String(maxCtx);
+    }
+    if (els.settingContextMaxLabel) {
+      const sourceTag = state.llmMaxContextSource ? ` (${state.llmMaxContextSource})` : "";
+      els.settingContextMaxLabel.textContent = state.llmMaxContext
+        ? `Max: ${maxCtx.toLocaleString()}${sourceTag}`
+        : `Max: ${maxCtx.toLocaleString()}`;
+    }
+    const baseVal =
+      rawVal !== null
+        ? rawVal
+        : els.settingContextLength?.value ||
+          state.currentStory?.settings?.context_length ||
+          16384;
+    const clamped = clampContextLength(baseVal);
+    if (els.settingContextLengthSlider) {
+      els.settingContextLengthSlider.value = String(clamped);
+    }
+    if (els.settingContextLength && document.activeElement !== els.settingContextLength) {
+      els.settingContextLength.value = String(clamped);
+    }
+    return clamped;
+  }
+
   function applyLlmStatusUI(info) {
-    els.llmPill.classList.remove("ready", "loading", "offline");
+    const statusTargets = [els.llmPill, els.btnEndpoint];
+    statusTargets.forEach((el) => el.classList.remove("ready", "loading", "offline"));
     state.llmReady = info.state === "ready";
+    const reportedMaxCtx =
+      typeof info.max_context === "number" && info.max_context >= 1024
+        ? Math.floor(info.max_context)
+        : null;
+    const reportedSource = info.max_context_source || null;
+    const maxCtxChanged =
+      state.llmMaxContext !== reportedMaxCtx ||
+      state.llmMaxContextSource !== reportedSource;
+    state.llmMaxContext = reportedMaxCtx;
+    state.llmMaxContextSource = reportedSource;
+    const reportedThinkingMode = ["toggle", "effort", "none"].includes(info.thinking_mode)
+      ? info.thinking_mode
+      : "none";
+    if (state.llmThinkingMode !== reportedThinkingMode) {
+      state.llmThinkingMode = reportedThinkingMode;
+      renderThinkingControlVisibility();
+    }
+    let statusClass = "offline";
+    let statusTitle = info.detail ? `LLM Offline (${info.detail})` : "LLM Offline";
     if (info.state === "ready") {
-      els.llmPill.classList.add("ready");
-      els.llmPill.title = info.model ? `LLM Ready (${info.model})` : "LLM Ready";
+      statusClass = "ready";
+      statusTitle = info.model ? `LLM Ready (${info.model})` : "LLM Ready";
       els.btnStartLlm.classList.add("hidden");
     } else if (info.state === "loading") {
-      els.llmPill.classList.add("loading");
-      els.llmPill.title = "Loading LLM...";
+      statusClass = "loading";
+      statusTitle = "Loading LLM...";
       els.btnStartLlm.classList.add("hidden");
     } else {
-      els.llmPill.classList.add("offline");
-      els.llmPill.title = info.detail ? `LLM Offline (${info.detail})` : "LLM Offline";
       els.btnStartLlm.classList.remove("hidden");
     }
+    statusTargets.forEach((el) => {
+      el.classList.add(statusClass);
+      el.title = statusTitle;
+    });
     const shortModel = info.model ? String(info.model).split("/").pop() : "Model";
     els.endpointBtnLabel.textContent =
       shortModel.length > 22 ? shortModel.slice(0, 20) + "…" : shortModel;
+    if (maxCtxChanged) {
+      const targetVal =
+        state.currentStory?.settings?.context_length ??
+        (els.settingContextLength?.value ? Number(els.settingContextLength.value) : 16384);
+      syncContextLengthControls(targetVal);
+    }
   }
 
   function populateEndpointModels(models = []) {
@@ -2794,9 +2959,11 @@
       const info = await api("/api/llm/status");
       applyLlmStatusUI(info);
     } catch {
-      els.llmPill.classList.remove("ready", "loading");
-      els.llmPill.classList.add("offline");
-      els.llmPill.title = "Server Offline";
+      [els.llmPill, els.btnEndpoint].forEach((el) => {
+        el.classList.remove("ready", "loading");
+        el.classList.add("offline");
+        el.title = "Server Offline";
+      });
     }
   }
 
@@ -3478,6 +3645,7 @@
     });
     els.btnInsertDefaultStoryInstructions.addEventListener("click", () => {
       els.storyAiInstructions.value = state.defaultAiInstructions;
+      persistAdventureSettings().catch((err) => showError(err.message));
     });
 
     document.querySelectorAll(".clear-card-btn").forEach((btn) => {
@@ -3502,22 +3670,27 @@
         repeat_penalty: numInputVal(els.settingRepeatPenalty, 1.05),
         presence_penalty: numInputVal(els.settingPresencePenalty, 0),
         frequency_penalty: numInputVal(els.settingFrequencyPenalty, 0),
-        context_length: numInputVal(els.settingContextLength, 16384),
+        context_length: clampContextLength(numInputVal(els.settingContextLength, 16384)),
         auto_summarize: els.settingAutoSummarize.checked,
         memory_bank_enabled: els.settingMemoryBank.checked,
         raw_model_output: els.settingRawOutput.checked,
         follow_latest_text: els.settingFollowLatest.checked,
-        enable_thinking: els.settingThinking.checked,
+        reasoning_effort:
+          REASONING_EFFORTS[Number(els.settingReasoningEffort?.value || 0)]?.key || "off",
+        enable_thinking: Number(els.settingReasoningEffort?.value || 0) > 0,
       };
     }
 
     let saveFeedbackTimer = null;
-    function flashSavedButton() {
+    function flashSavedStatus() {
+      if (!els.settingsSaveStatus) return;
       if (saveFeedbackTimer) clearTimeout(saveFeedbackTimer);
-      els.btnSaveSettings.textContent = "Saved!";
+      els.settingsSaveStatus.textContent = "Saved ✓";
+      els.settingsSaveStatus.classList.add("saved");
       saveFeedbackTimer = setTimeout(() => {
-        els.btnSaveSettings.textContent = "Save Settings";
-      }, 1200);
+        els.settingsSaveStatus.textContent = "All changes auto-save";
+        els.settingsSaveStatus.classList.remove("saved");
+      }, 1400);
     }
 
     async function persistAiSettingsOnly() {
@@ -3537,16 +3710,15 @@
           body: JSON.stringify({ settings: settingsPayload }),
         });
       }
-      flashSavedButton();
+      flashSavedStatus();
     }
 
-    els.settingsPaneAi.querySelectorAll("input").forEach((inp) => {
-      inp.addEventListener("change", () => {
-        persistAiSettingsOnly().catch((err) => showError(err.message));
-      });
-    });
-
-    els.btnSaveSettings.addEventListener("click", async () => {
+    let adventureSaveTimer = null;
+    async function persistAdventureSettings() {
+      if (adventureSaveTimer) {
+        clearTimeout(adventureSaveTimer);
+        adventureSaveTimer = null;
+      }
       if (!state.currentStory) {
         await persistAiSettingsOnly();
         return;
@@ -3555,8 +3727,9 @@
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
+      const nextTitle = els.storyDetailsTitle.value.trim() || state.currentStory.title;
       const payload = {
-        title: els.storyDetailsTitle.value.trim() || state.currentStory.title,
+        title: nextTitle,
         description: els.storyDetailsDesc.value,
         tags: tagsList,
         ai_instructions: els.storyAiInstructions.value,
@@ -3579,8 +3752,92 @@
         }
       );
       state.currentStory = data.story;
+      els.storyTitle.value = data.story.title || nextTitle;
       updateModeUI();
-      flashSavedButton();
+      flashSavedStatus();
+    }
+
+    function scheduleAdventureSave() {
+      if (!state.currentStory) return;
+      if (adventureSaveTimer) clearTimeout(adventureSaveTimer);
+      adventureSaveTimer = setTimeout(() => {
+        persistAdventureSettings().catch((err) => showError(err.message));
+      }, 400);
+    }
+
+    if (els.settingContextLengthSlider) {
+      els.settingContextLengthSlider.addEventListener("input", () => {
+        const clamped = clampContextLength(els.settingContextLengthSlider.value);
+        els.settingContextLengthSlider.value = String(clamped);
+        els.settingContextLength.value = String(clamped);
+      });
+    }
+
+    if (els.settingContextLength) {
+      els.settingContextLength.addEventListener("input", () => {
+        const parsed = Number(els.settingContextLength.value);
+        if (Number.isFinite(parsed) && parsed > 0 && els.settingContextLengthSlider) {
+          els.settingContextLengthSlider.value = String(clampContextLength(parsed));
+        }
+      });
+      const clampInputField = () => {
+        const clamped = clampContextLength(els.settingContextLength.value);
+        els.settingContextLength.value = String(clamped);
+        if (els.settingContextLengthSlider) {
+          els.settingContextLengthSlider.value = String(clamped);
+        }
+      };
+      els.settingContextLength.addEventListener("change", clampInputField);
+      els.settingContextLength.addEventListener("blur", clampInputField);
+    }
+
+    if (els.settingThinking) {
+      els.settingThinking.addEventListener("change", () => {
+        syncReasoningEffortUI(els.settingThinking.checked ? "medium" : "off");
+      });
+    }
+
+    if (els.settingReasoningEffort) {
+      els.settingReasoningEffort.addEventListener("input", () => {
+        const idx = Number(els.settingReasoningEffort.value);
+        const item = REASONING_EFFORTS[idx] || REASONING_EFFORTS[0];
+        syncReasoningEffortUI(item.key);
+      });
+    }
+
+    els.effortStops.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.effort || "off";
+        syncReasoningEffortUI(key);
+        persistAiSettingsOnly().catch((err) => showError(err.message));
+      });
+    });
+
+    els.settingsPaneAi.querySelectorAll("input").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        persistAiSettingsOnly().catch((err) => showError(err.message));
+      });
+    });
+
+    [
+      els.storyDetailsTitle,
+      els.storyDetailsDesc,
+      els.storyDetailsTags,
+      els.storyAiInstructions,
+      els.storySummaryInput,
+      els.plotEssentialsInput,
+      els.authorsNoteInput,
+      els.storyCharacterName,
+    ].forEach((el) => {
+      if (!el) return;
+      el.addEventListener("input", scheduleAdventureSave);
+      el.addEventListener("change", () => {
+        persistAdventureSettings().catch((err) => showError(err.message));
+      });
+    });
+
+    els.storyThirdPerson.addEventListener("change", () => {
+      persistAdventureSettings().catch((err) => showError(err.message));
     });
 
     els.btnEndpoint.addEventListener("click", openEndpointModal);

@@ -81,6 +81,10 @@ LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8080").rstrip("/")
 _BOOT_LLM_URL = LLM_URL
 _detected_llama_urls: set[str] = set()
 _discovered_models_cache: dict[str, list[str]] = {}
+_discovered_max_ctx_cache: dict[str, int] = {}
+_discovered_model_max_ctx: dict[str, dict[str, int]] = {}
+_discovered_thinking_mode_cache: dict[str, str] = {}
+_discovered_model_thinking_cache: dict[str, dict[str, str]] = {}
 
 
 def _active_endpoint() -> dict[str, Any]:
@@ -168,7 +172,12 @@ def _build_chat_payload(
     presence_penalty: float | None = None,
     frequency_penalty: float | None = None,
     enable_thinking: bool = False,
+    reasoning_effort: str = "off",
 ) -> dict[str, Any]:
+    effort = (reasoning_effort or ("medium" if enable_thinking else "off")).strip().lower()
+    if effort not in ("off", "low", "medium", "high", "xhigh"):
+        effort = "medium" if enable_thinking else "off"
+    thinking_on = effort != "off"
     payload: dict[str, Any] = {
         "model": _resolve_model_name(cfg),
         "messages": messages,
@@ -187,7 +196,11 @@ def _build_chat_payload(
             payload["top_k"] = top_k
         if repeat_penalty is not None:
             payload["repeat_penalty"] = repeat_penalty
-        payload["chat_template_kwargs"] = {"enable_thinking": bool(enable_thinking)}
+        payload["chat_template_kwargs"] = {"enable_thinking": thinking_on}
+        if thinking_on:
+            payload["reasoning_effort"] = effort
+    elif thinking_on:
+        payload["reasoning_effort"] = effort
     return payload
 
 
@@ -218,6 +231,183 @@ def get_story_lock(story_id: str) -> threading.Lock:
         return lock
 
 
+def _infer_thinking_mode_from_model(
+    model_id: str | None,
+    supported_params: list[str] | None = None,
+) -> str:
+    """Classify a model's reasoning control: 'effort' (stepped), 'toggle' (on/off), or 'none'."""
+    if supported_params:
+        params_lower = {str(p).lower() for p in supported_params}
+        if "reasoning_effort" in params_lower or "reasoning" in params_lower:
+            return "effort"
+    mid = str(model_id or "").strip().lower()
+    if not mid:
+        return "none"
+    effort_markers = (
+        "gpt-oss",
+        "o1",
+        "o3",
+        "o4",
+        "gpt-5",
+        "grok-3-mini",
+        "grok-4",
+        "claude-3-7",
+        "claude-3.7",
+        "claude-4",
+        "claude-sonnet-4",
+        "claude-opus-4",
+        "claude-haiku-4",
+        "gemini-2.5",
+        "gemini-3",
+        "gemini-4",
+    )
+    if any(m in mid for m in effort_markers):
+        return "effort"
+    toggle_markers = (
+        "gemma-4",
+        "gemma4",
+        "qwen3",
+        "qwen-3",
+        "qwen3.5",
+        "qwq",
+        "deepseek-r1",
+        "deepseek-reasoner",
+        "smollm3",
+        "glm-4",
+    )
+    if any(m in mid for m in toggle_markers):
+        return "toggle"
+    return "none"
+
+
+def _probe_llama_props(active_url: str, api_key: str) -> tuple[int | None, str | None]:
+    """Query llama.cpp /props (and fallback /slots) for context limit and thinking mode."""
+    base = active_url.rstrip("/")
+    headers = _llm_headers(api_key)
+    found_ctx: int | None = None
+    found_thinking: str | None = None
+    for path in ("/props", "/slots"):
+        try:
+            req = urllib.request.Request(f"{base}{path}", headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception:
+            continue
+        n_ctx: Any = None
+        if isinstance(data, dict):
+            dgs = data.get("default_generation_settings")
+            if isinstance(dgs, dict):
+                n_ctx = dgs.get("n_ctx")
+            if n_ctx is None:
+                n_ctx = data.get("n_ctx")
+            if path == "/props" and found_thinking is None:
+                caps = data.get("chat_template_caps")
+                tmpl = str(data.get("chat_template") or "")
+                if isinstance(caps, dict) and caps.get("supports_reasoning_effort"):
+                    found_thinking = "effort"
+                elif "enable_thinking" in tmpl:
+                    found_thinking = "toggle"
+                elif caps is not None or tmpl:
+                    found_thinking = "none"
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            n_ctx = data[0].get("n_ctx")
+        if found_ctx is None and isinstance(n_ctx, (int, float)) and int(n_ctx) >= 1024:
+            found_ctx = int(n_ctx)
+            _discovered_max_ctx_cache[base] = found_ctx
+        if found_ctx is not None and (found_thinking is not None or path != "/props"):
+            break
+    if found_thinking is not None:
+        _discovered_thinking_mode_cache[base] = found_thinking
+    return found_ctx, found_thinking
+
+
+def _probe_llama_max_context(active_url: str, api_key: str) -> int | None:
+    """Query llama.cpp /props (and fallback /slots) for the active slot context limit."""
+    ctx, _ = _probe_llama_props(active_url, api_key)
+    return ctx
+
+
+def _extract_model_max_context(model_obj: dict[str, Any]) -> int | None:
+    """Extract per-model max context length from an OpenAI-compat /v1/models entry."""
+    if not isinstance(model_obj, dict):
+        return None
+    candidates: list[Any] = [
+        model_obj.get("context_length"),
+        model_obj.get("max_model_len"),
+        model_obj.get("max_context_length"),
+        model_obj.get("input_token_limit"),
+        model_obj.get("context_window"),
+    ]
+    top_prov = model_obj.get("top_provider")
+    if isinstance(top_prov, dict):
+        candidates.append(top_prov.get("context_length"))
+    meta = model_obj.get("meta")
+    if isinstance(meta, dict):
+        candidates.append(meta.get("n_ctx"))
+        candidates.append(meta.get("n_ctx_train"))
+    for val in candidates:
+        if isinstance(val, (int, float)) and int(val) >= 1024:
+            return int(val)
+    return None
+
+
+def _cache_models_payload(active_url: str, mdata: Any) -> list[str]:
+    """Parse /v1/models JSON, caching model IDs, context lengths, and thinking modes."""
+    base = active_url.rstrip("/")
+    models: list[str] = []
+    ctx_map: dict[str, int] = {}
+    think_map: dict[str, str] = {}
+    items = mdata.get("data") if isinstance(mdata, dict) else None
+    if isinstance(items, list):
+        for m in items:
+            if not isinstance(m, dict) or not m.get("id"):
+                continue
+            mid = str(m["id"])
+            models.append(mid)
+            ctx = _extract_model_max_context(m)
+            if ctx is not None:
+                ctx_map[mid] = ctx
+            supp = m.get("supported_parameters")
+            think_map[mid] = _infer_thinking_mode_from_model(
+                mid, supp if isinstance(supp, list) else None
+            )
+    _discovered_models_cache[base] = models
+    if ctx_map:
+        _discovered_model_max_ctx[base] = ctx_map
+    else:
+        _discovered_model_max_ctx.pop(base, None)
+    if think_map:
+        _discovered_model_thinking_cache[base] = think_map
+    else:
+        _discovered_model_thinking_cache.pop(base, None)
+    return models
+
+
+def get_effective_max_context() -> int | None:
+    """Return the active LLM's current max context length (llama.cpp /props or /v1/models)."""
+    cfg = _active_endpoint()
+    active_url = str(cfg.get("llm_url") or LLM_URL).rstrip("/")
+    cached = _discovered_max_ctx_cache.get(active_url)
+    if cached is not None:
+        return cached
+    parsed = urllib.parse.urlparse(active_url)
+    probe_health = parsed.scheme != "https" and str(cfg.get("provider_type") or "auto") != "openai_compat"
+    if probe_health:
+        llama_ctx = _probe_llama_max_context(active_url, str(cfg.get("api_key") or ""))
+        if llama_ctx is not None:
+            return llama_ctx
+    # Fallback to per-model context length discovered from /v1/models (OpenRouter, vLLM, etc.)
+    model_map = _discovered_model_max_ctx.get(active_url) or {}
+    if model_map:
+        chosen = str(cfg.get("model") or "").strip()
+        if chosen and chosen in model_map:
+            return model_map[chosen]
+        discovered = _discovered_models_cache.get(active_url) or []
+        if discovered and discovered[0] in model_map:
+            return model_map[discovered[0]]
+    return None
+
+
 def check_llm_status() -> dict[str, Any]:
     cfg = _active_endpoint()
     active_url = str(cfg.get("llm_url") or LLM_URL).rstrip("/")
@@ -231,6 +421,9 @@ def check_llm_status() -> dict[str, Any]:
         "state": "offline",
         "model": cfg.get("model") or None,
         "available_models": [],
+        "max_context": None,
+        "max_context_source": None,
+        "thinking_mode": "none",
         "detail": "Server not reachable",
         "process_running": _is_managed_proc_alive(),
         "config": public_endpoint_config(cfg),
@@ -282,8 +475,7 @@ def check_llm_status() -> dict[str, Any]:
         )
         with urllib.request.urlopen(req, timeout=3.0) as resp:
             mdata = json.loads(resp.read().decode("utf-8", errors="replace"))
-            models = [str(m.get("id")) for m in (mdata.get("data") or []) if m.get("id")]
-            _discovered_models_cache[active_url] = models
+            models = _cache_models_payload(active_url, mdata)
             status_info["available_models"] = models[:100]
             if status_info["state"] == "offline":
                 status_info["state"] = "ready"
@@ -306,6 +498,33 @@ def check_llm_status() -> dict[str, Any]:
     except Exception as e:
         if status_info["state"] == "offline":
             status_info["detail"] = str(e)
+
+    if status_info["state"] == "ready":
+        active_model = str(status_info.get("model") or "").strip()
+        llama_thinking: str | None = None
+        if probe_health or active_url in _detected_llama_urls:
+            llama_ctx, llama_thinking = _probe_llama_props(active_url, api_key)
+            if llama_ctx is not None:
+                status_info["max_context"] = llama_ctx
+                status_info["max_context_source"] = "llama.cpp"
+        if status_info["max_context"] is None:
+            model_map = _discovered_model_max_ctx.get(active_url) or {}
+            if active_model and active_model in model_map:
+                status_info["max_context"] = model_map[active_model]
+                status_info["max_context_source"] = "model"
+        if llama_thinking is not None:
+            status_info["thinking_mode"] = llama_thinking
+        else:
+            tmap = _discovered_model_thinking_cache.get(active_url) or {}
+            if active_model and active_model in tmap:
+                status_info["thinking_mode"] = tmap[active_model]
+            else:
+                status_info["thinking_mode"] = _infer_thinking_mode_from_model(active_model)
+    else:
+        _discovered_max_ctx_cache.pop(active_url, None)
+        _discovered_model_max_ctx.pop(active_url, None)
+        _discovered_thinking_mode_cache.pop(active_url, None)
+        _discovered_model_thinking_cache.pop(active_url, None)
 
     return status_info
 
@@ -553,7 +772,10 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/llm/config":
             saved = save_endpoint_config(body)
-            _discovered_models_cache.pop(str(saved.get("llm_url") or "").rstrip("/"), None)
+            saved_url = str(saved.get("llm_url") or "").rstrip("/")
+            _discovered_models_cache.pop(saved_url, None)
+            _discovered_max_ctx_cache.pop(saved_url, None)
+            _discovered_model_max_ctx.pop(saved_url, None)
             self._send_json(
                 200,
                 {
@@ -1024,7 +1246,10 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             return max(1, (len(text) + 3) // 4), False
 
     def _build_context_report(self, story: Story) -> dict[str, Any]:
-        report = inspect_story_context(story)
+        max_ctx = get_effective_max_context()
+        report = inspect_story_context(story, max_context_limit=max_ctx)
+        if max_ctx is not None:
+            report["max_context"] = max_ctx
         exact = True
         total_tokens = 0
         for sec in report["sections"]:
@@ -1322,6 +1547,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
 
             context_stopped = False
             if not input_stopped:
+                max_ctx = get_effective_max_context()
                 plan = build_context_plan(
                     story,
                     apply_context_scripts=True,
@@ -1329,6 +1555,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
                     guide_text=guide_text,
                     retry_instructions=retry_instructions,
                     previous_draft=previous_draft,
+                    max_context_limit=max_ctx,
                 )
                 context_stopped = bool(plan.get("script_stop"))
                 messages = plan["messages"]
@@ -1387,6 +1614,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             presence_penalty=settings.presence_penalty,
             frequency_penalty=settings.frequency_penalty,
             enable_thinking=settings.enable_thinking,
+            reasoning_effort=settings.reasoning_effort,
         )
 
         is_continue = (

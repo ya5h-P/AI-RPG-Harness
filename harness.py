@@ -176,6 +176,38 @@ class Segment:
         )
 
 
+MAX_FALLBACK_CONTEXT_LENGTH = 2000000
+
+
+def resolve_context_limit(
+    configured: int | None,
+    max_context_limit: int | None = None,
+) -> int:
+    ctx = int(configured or 16384)
+    upper = (
+        max(1024, int(max_context_limit))
+        if max_context_limit is not None and int(max_context_limit) >= 1024
+        else MAX_FALLBACK_CONTEXT_LENGTH
+    )
+    return max(1024, min(upper, ctx))
+
+
+REASONING_EFFORT_LEVELS = ("off", "low", "medium", "high", "xhigh")
+
+
+def normalize_reasoning_effort(
+    effort: Any,
+    enable_thinking: Any = None,
+) -> str:
+    if isinstance(effort, str):
+        norm = effort.strip().lower()
+        if norm in REASONING_EFFORT_LEVELS:
+            return norm
+    if enable_thinking is True:
+        return "medium"
+    return "off"
+
+
 @dataclass
 class StorySettings:
     temperature: float = 0.85
@@ -186,6 +218,7 @@ class StorySettings:
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
     context_length: int = 16384
+    reasoning_effort: str = "off"
     enable_thinking: bool = False
     auto_summarize: bool = False
     memory_bank_enabled: bool = False
@@ -197,7 +230,11 @@ class StorySettings:
         if not data:
             return cls()
         ctx_len = int(data.get("context_length", 16384))
-        ctx_len = max(1024, min(98304, ctx_len))
+        ctx_len = max(1024, min(MAX_FALLBACK_CONTEXT_LENGTH, ctx_len))
+        effort = normalize_reasoning_effort(
+            data.get("reasoning_effort"),
+            data.get("enable_thinking"),
+        )
         return cls(
             temperature=float(data.get("temperature", 0.85)),
             top_p=float(data.get("top_p", 0.95)),
@@ -207,7 +244,8 @@ class StorySettings:
             presence_penalty=float(data.get("presence_penalty", 0.0)),
             frequency_penalty=float(data.get("frequency_penalty", 0.0)),
             context_length=ctx_len,
-            enable_thinking=bool(data.get("enable_thinking", False)),
+            reasoning_effort=effort,
+            enable_thinking=(effort != "off"),
             auto_summarize=bool(data.get("auto_summarize", False)),
             memory_bank_enabled=bool(data.get("memory_bank_enabled", False)),
             raw_model_output=bool(data.get("raw_model_output", False)),
@@ -1243,6 +1281,7 @@ def run_story_scripts(
     hook: str,
     text: str | None,
     extra_info: dict[str, Any] | None = None,
+    max_context_limit: int | None = None,
 ) -> dict[str, Any]:
     """Run all active scripts for a hook (`input` | `context` | `output`) in order."""
     scripts = _active_scripts_for_story(story)
@@ -1284,7 +1323,7 @@ def run_story_scripts(
         }
         for c in story.story_cards
     ]
-    ctx_limit = max(1024, min(98304, int(story.settings.context_length or 16384)))
+    ctx_limit = resolve_context_limit(story.settings.context_length, max_context_limit)
     info_payload = {
         "actionCount": len(story.segments),
         "characterName": story.character_name,
@@ -1349,13 +1388,14 @@ def build_context_plan(
     guide_text: str = "",
     retry_instructions: str = "",
     previous_draft: str = "",
+    max_context_limit: int | None = None,
 ) -> dict[str, Any]:
     """
     Build the prompt messages and full Context Viewer breakdown following
     AI Dungeon's Required (70% max) vs Dynamic (Story Cards, Memory Bank, History)
     context priority rules.
     """
-    ctx_limit = max(1024, min(98304, int(story.settings.context_length or 16384)))
+    ctx_limit = resolve_context_limit(story.settings.context_length, max_context_limit)
     req_cap = int(ctx_limit * 0.70)
 
     raw_instructions = story.ai_instructions.strip() or DEFAULT_AI_INSTRUCTIONS
@@ -1688,6 +1728,7 @@ def build_chat_messages(
     guide_text: str = "",
     retry_instructions: str = "",
     previous_draft: str = "",
+    max_context_limit: int | None = None,
 ) -> list[dict[str, str]]:
     return build_context_plan(
         story,
@@ -1696,12 +1737,21 @@ def build_chat_messages(
         guide_text=guide_text,
         retry_instructions=retry_instructions,
         previous_draft=previous_draft,
+        max_context_limit=max_context_limit,
     )["messages"]
 
 
-def inspect_story_context(story: Story) -> dict[str, Any]:
+def inspect_story_context(
+    story: Story,
+    max_context_limit: int | None = None,
+) -> dict[str, Any]:
     """Return structured context sections for the Context Viewer."""
-    return build_context_plan(story, apply_context_scripts=False, bump_memory_uses=False)
+    return build_context_plan(
+        story,
+        apply_context_scripts=False,
+        bump_memory_uses=False,
+        max_context_limit=max_context_limit,
+    )
 
 
 def _safe_id(raw_id: str) -> str:

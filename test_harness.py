@@ -1765,6 +1765,140 @@ class TestServerAPI(unittest.TestCase):
         finally:
             harness._fetch_community_source = orig_fetch
 
+    def test_llama_max_context_clamping(self):
+        class MockLlamaHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_GET(self):
+                if self.path == "/health":
+                    payload = json.dumps({"status": "ok"}).encode("utf-8")
+                elif self.path == "/v1/models":
+                    payload = json.dumps({"data": [{"id": "gemma-4-26b-a4b-qat"}]}).encode("utf-8")
+                elif self.path == "/props":
+                    payload = json.dumps({"default_generation_settings": {"n_ctx": 32768}}).encode("utf-8")
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        mock_llm = ThreadingHTTPServer(("127.0.0.1", 0), MockLlamaHandler)
+        mock_port = mock_llm.server_address[1]
+        t = threading.Thread(target=mock_llm.serve_forever, daemon=True)
+        t.start()
+
+        orig_llm_url = server.LLM_URL
+        mock_url = f"http://127.0.0.1:{mock_port}"
+        server.LLM_URL = mock_url
+        server._discovered_max_ctx_cache.pop(mock_url, None)
+        try:
+            st, status_res = self._req("GET", "/api/llm/status")
+            self.assertEqual(st, 200)
+            self.assertEqual(status_res["state"], "ready")
+            self.assertEqual(status_res["max_context"], 32768)
+
+            # Create a story and set context_length higher than llama.cpp's 32768
+            st, sc_res = self._req("GET", "/api/scenarios")
+            sc_id = sc_res["scenarios"][0]["id"]
+            st, created = self._req("POST", "/api/stories", {"scenario_id": sc_id})
+            story_id = created["story"]["id"]
+
+            st, patched = self._req(
+                "PATCH",
+                f"/api/stories/{story_id}",
+                {"settings": {"context_length": 65536}},
+            )
+            self.assertEqual(st, 200)
+            self.assertEqual(patched["story"]["settings"]["context_length"], 65536)
+
+            # Context inspection clamps effective context_limit to llama.cpp's 32768
+            st, ctx_res = self._req("GET", f"/api/stories/{story_id}/context")
+            self.assertEqual(st, 200)
+            self.assertEqual(ctx_res["context_limit"], 32768)
+            self.assertEqual(ctx_res["max_context"], 32768)
+        finally:
+            server._discovered_max_ctx_cache.pop(mock_url, None)
+            server.LLM_URL = orig_llm_url
+            mock_llm.shutdown()
+            mock_llm.server_close()
+
+    def test_cloud_model_max_context_from_v1_models(self):
+        class MockCloudHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_GET(self):
+                if self.path == "/v1/models":
+                    payload = json.dumps({
+                        "data": [
+                            {"id": "openrouter/model-a", "context_length": 131072},
+                            {"id": "openrouter/model-b", "top_provider": {"context_length": 49152}},
+                        ]
+                    }).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+        mock_cloud = ThreadingHTTPServer(("127.0.0.1", 0), MockCloudHandler)
+        mock_port = mock_cloud.server_address[1]
+        t = threading.Thread(target=mock_cloud.serve_forever, daemon=True)
+        t.start()
+
+        orig_llm_url = server.LLM_URL
+        mock_url = f"http://127.0.0.1:{mock_port}"
+        server.LLM_URL = mock_url
+        server._discovered_max_ctx_cache.pop(mock_url, None)
+        server._discovered_model_max_ctx.pop(mock_url, None)
+        try:
+            st, status_res = self._req("GET", "/api/llm/status")
+            self.assertEqual(st, 200)
+            self.assertEqual(status_res["state"], "ready")
+            self.assertEqual(status_res["model"], "openrouter/model-a")
+            self.assertEqual(status_res["max_context"], 131072)
+            self.assertEqual(status_res["max_context_source"], "model")
+
+            # Story set higher than model-a's 131072 gets clamped to 131072
+            st, sc_res = self._req("GET", "/api/scenarios")
+            sc_id = sc_res["scenarios"][0]["id"]
+            st, created = self._req("POST", "/api/stories", {"scenario_id": sc_id})
+            story_id = created["story"]["id"]
+            st, _ = self._req(
+                "PATCH",
+                f"/api/stories/{story_id}",
+                {"settings": {"context_length": 200000}},
+            )
+            self.assertEqual(st, 200)
+            st, ctx_res = self._req("GET", f"/api/stories/{story_id}/context")
+            self.assertEqual(st, 200)
+            self.assertEqual(ctx_res["context_limit"], 131072)
+            self.assertEqual(ctx_res["max_context"], 131072)
+        finally:
+            server._discovered_max_ctx_cache.pop(mock_url, None)
+            server._discovered_model_max_ctx.pop(mock_url, None)
+            server.LLM_URL = orig_llm_url
+            mock_cloud.shutdown()
+            mock_cloud.server_close()
+
+    def test_thinking_mode_detection(self):
+        self.assertEqual(server._infer_thinking_mode_from_model("gemma-4-26b-a4b-qat"), "toggle")
+        self.assertEqual(server._infer_thinking_mode_from_model("gpt-oss-20b"), "effort")
+        self.assertEqual(server._infer_thinking_mode_from_model("openai/o3-mini"), "effort")
+        self.assertEqual(
+            server._infer_thinking_mode_from_model("custom-model", ["temperature", "reasoning"]),
+            "effort",
+        )
+        self.assertEqual(server._infer_thinking_mode_from_model("muse-12b"), "none")
+
 
 if __name__ == "__main__":
     unittest.main()

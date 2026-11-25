@@ -11,7 +11,7 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="topbar-left">
-          <div id="llm-pill" class="llm-pill offline" title="Checking LLM..." aria-label="LLM status">
+          <div id="llm-pill" class="llm-pill offline hidden" title="Checking LLM..." aria-label="LLM status">
             <span class="dot"></span>
           </div>
           <button id="btn-home" class="icon-btn" title="Home (Adventures & Scenarios)">
@@ -31,8 +31,8 @@
           <button id="btn-start-llm" class="secondary-btn hidden">
             Start LLM
           </button>
-          <button id="btn-endpoint" class="icon-btn" title="Switch LLM Endpoint or Model" aria-label="Model Endpoint">
-            🔌 <span id="endpoint-btn-label">Model</span>
+          <button id="btn-endpoint" class="icon-btn endpoint-btn offline" title="Switch LLM Endpoint or Model" aria-label="Model Endpoint">
+            <span class="dot"></span><span id="endpoint-btn-label">Model</span>
           </button>
           <button type="button" id="btn-undo" class="icon-btn topbar-icon-btn hidden" title="Undo last change" aria-label="Undo">
             ↶
@@ -406,9 +406,30 @@
                 </div>
               </div>
               <div class="drawer-section settings-grid">
-                <div>
-                  <label class="field-label" for="setting-context-length">Context Length</label>
-                  <input id="setting-context-length" type="number" step="1024" min="1024" max="98304" />
+                <div class="context-length-field">
+                  <div class="context-label-row">
+                    <label class="field-label" for="setting-context-length">Context Length</label>
+                    <span id="setting-context-max-label" class="context-max-label">Max: 131,072</span>
+                  </div>
+                  <div class="context-slider-row">
+                    <input
+                      id="setting-context-length-slider"
+                      class="context-slider"
+                      type="range"
+                      min="1024"
+                      max="131072"
+                      step="512"
+                      aria-label="Context Length slider"
+                    />
+                    <input
+                      id="setting-context-length"
+                      class="context-number-input"
+                      type="number"
+                      step="512"
+                      min="1024"
+                      max="131072"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label class="field-label" for="setting-max-tokens">Response Length</label>
@@ -465,18 +486,60 @@
                   <input id="setting-follow-latest" type="checkbox" checked />
                   <span>Follow latest text (auto-scroll while streaming)</span>
                 </label>
-                <label class="checkbox-row">
+                <label class="checkbox-row hidden" id="setting-thinking-toggle-row">
                   <input id="setting-thinking" type="checkbox" />
-                  <span>Enable Gemma Thinking Mode</span>
+                  <span>Enable Thinking Mode</span>
                 </label>
+                <div class="effort-control hidden" id="setting-effort-control">
+                  <div class="context-label-row">
+                    <label class="field-label" for="setting-reasoning-effort">Thinking / Reasoning Effort</label>
+                    <span id="setting-effort-badge" class="context-max-label">off</span>
+                  </div>
+                  <div class="effort-track-wrap">
+                    <input
+                      id="setting-reasoning-effort"
+                      class="effort-range"
+                      type="range"
+                      min="0"
+                      max="4"
+                      step="1"
+                      value="0"
+                      aria-label="Thinking and reasoning effort"
+                    />
+                    <div class="effort-rail" aria-hidden="true">
+                      <div id="setting-effort-fill" class="effort-rail-fill"></div>
+                    </div>
+                    <div class="effort-stops" role="radiogroup" aria-label="Effort levels">
+                      <button type="button" class="effort-stop active" data-effort="off" data-idx="0">
+                        <span class="effort-dot"></span>
+                        <span class="effort-stop-label">off</span>
+                      </button>
+                      <button type="button" class="effort-stop" data-effort="low" data-idx="1">
+                        <span class="effort-dot"></span>
+                        <span class="effort-stop-label">low</span>
+                      </button>
+                      <button type="button" class="effort-stop" data-effort="medium" data-idx="2">
+                        <span class="effort-dot"></span>
+                        <span class="effort-stop-label">medium</span>
+                      </button>
+                      <button type="button" class="effort-stop" data-effort="high" data-idx="3">
+                        <span class="effort-dot"></span>
+                        <span class="effort-stop-label">high</span>
+                      </button>
+                      <button type="button" class="effort-stop" data-effort="xhigh" data-idx="4">
+                        <span class="effort-dot"></span>
+                        <span class="effort-stop-label">xhigh</span>
+                      </button>
+                    </div>
+                  </div>
+                  <p id="setting-effort-desc" class="effort-desc">No reasoning tokens; fastest response and natural prose</p>
+                </div>
               </div>
             </div>
           </div>
 
-          <div class="drawer-section">
-            <button id="btn-save-settings" class="primary-btn full-width">
-              Save Settings
-            </button>
+          <div id="settings-save-status" class="settings-save-status" aria-live="polite">
+            All changes auto-save
           </div>
         </aside>
       </div>
@@ -680,10 +743,10 @@
             <h2 id="context-modal-title">Context Viewer</h2>
             <p id="context-total-summary" class="modal-subtitle">Inspecting prompt tokens...</p>
           </div>
-          <div style="display: flex; gap: 6px; align-items: center;">
+          <button id="btn-close-context" class="close-btn" aria-label="Close">×</button>
+          <div class="modal-header-actions">
             <button type="button" id="btn-context-next" class="chip-btn active">Next Turn</button>
             <button type="button" id="btn-context-last" class="chip-btn">Last Generation</button>
-            <button id="btn-close-context" class="close-btn" aria-label="Close">×</button>
           </div>
         </div>
         <div id="context-sections-list" class="context-sections-list"></div>
@@ -698,7 +761,8 @@
             <h2 id="play-setup-title">Start Adventure</h2>
             <p id="play-setup-subtitle" class="modal-subtitle"></p>
           </div>
-          <div class="play-setup-header-actions">
+          <button id="btn-close-play-setup" class="close-btn" aria-label="Close">×</button>
+          <div class="modal-header-actions play-setup-header-actions">
             <div class="play-setup-script-pills" role="group" aria-label="Optional Scripts">
               <button
                 type="button"
@@ -719,7 +783,6 @@
                 ✨ Auto-Cards
               </button>
             </div>
-            <button id="btn-close-play-setup" class="close-btn" aria-label="Close">×</button>
           </div>
         </div>
         <div id="play-setup-body" class="play-setup-body"></div>
