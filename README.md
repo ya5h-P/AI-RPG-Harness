@@ -1,57 +1,90 @@
+<div align="center">
+
 # AI RPG Harness
 
-A local, self-hosted interactive fiction & AI RPG web application modeled after AI Dungeon's core gameplay loop—with zero Python third-party dependencies, full desktop and mobile web UI, nested Multiple Choice scenarios, Character Creator, Story Cards, dynamic memory & context budgeting, JavaScript scripting hooks, and one-command Tailscale mobile access.
+**Play unlimited, private, AI Dungeon-style text adventures on your own computer—or from your phone.**
 
-> **Disclosure:** All of the code in this repository was generated with AI assistance.
-> **Security Note:** This app has no authentication and runs JavaScript scenario scripts via Node.js `vm`. Run it only on `localhost` or a private network (such as Tailscale), and only execute scripts you trust.
+*Self-hosted · Zero Python dependencies · Local & Cloud AI · Desktop & Mobile*
+
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Node.js 18+](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f5b759.svg)](LICENSE)
+
+[Features](#features) · [Installation](#installation) · [How to Play](#how-to-play) · [Technical Information](#technical-information)
+
+<br />
+
+<img src="docs/screenshots/gameplay-desktop.png" alt="AI RPG Harness desktop gameplay" width="880" />
+
+*Inline dark-mode prose, styled character actions, and quick turn controls.*
+
+</div>
 
 ---
 
-## Screenshots
+AI RPG Harness gives you a clean, distraction-free dark-mode home for interactive storytelling. Connect it to a local AI running on your own hardware—or plug in an OpenAI-compatible cloud API—and start playing right away. No subscriptions, no accounts, and no `pip install` needed.
 
-| Home (`Scenarios`) | Desktop Gameplay | Mobile Gameplay |
-|---|---|---|
-| ![Home Scenarios](docs/screenshots/home.png) | ![Desktop Gameplay](docs/screenshots/gameplay-desktop.png) | ![Mobile Gameplay](docs/screenshots/gameplay-mobile.png) |
+> [!NOTE]
+> **Disclosure:** All code in this repository was generated with AI assistance.
+
+> [!WARNING]
+> **Safety Notice:** This app has no login screen and runs JavaScript scenario scripts on your machine. Only run it on your own computer (`localhost`) or a private network like Tailscale, and only use scripts you trust.
 
 ---
 
 ## Features
 
-- **Home Hub (`Adventures` & `Scenarios`)**: Clean 2-tab start page to resume adventures or browse, play, create, edit, and import scenarios.
-- **4 Input Modes**: Compact collapsible pill switcher (`Do`, `Say`, `Story`, `Guide`) plus `Send` (streams SSE generation) and `+ Add` (appends beats without triggering generation yet).
-- **Turn Editing & Retry Variants**:
-  - `Undo` / `Redo`, `Continue`, `Erase`, `Retry`, and `Retry with changes`.
-  - Smooth horizontal **swipe carousel** on mobile (`‹` / `›` on desktop) to switch between Retry generations.
-  - Hover (desktop) or tap (mobile) any message to **Edit**, **Delete**, **Erase to Here**, **Change Name** (Third Person), or **View Context**.
-- **Scenario Engine**:
-  - **Story** scenarios with `${placeholder}` prompts and Third Person mode.
-  - **Deep Nested Multiple Choice** trees with recursive inheritance of Story Cards, Scripts, Plot fields, and leaf option titles.
-  - **Character Creator** with **Quickstart** (auto-rolled profile + cards) and a step-by-step Name / Gender / Card Category wizard.
-  - **Scenario Importer**: Import from `play.aidungeon.com` Scenario URLs (via optional Playwright) or exported `metadata.json` / `.json` files.
-- **Plot, Memory & Context Inspector**:
-  - Dedicated **Adventure** (`Plot`, `Cards`, `Scripts`, `Details`) and **AI Settings** tabs; AI Settings persist globally in `settings.json` across new adventures.
-  - Keyword-triggered & pinned **Story Cards** (`.json` import/export + AI entry generation).
-  - Automatic **Story Summarization** (every 15 actions) & **Memory Bank** retrieval (every 6 actions).
-  - **View Context** modal with proportional token-usage bar, `Context Warning` notices, `Removed Context` deduplication log, and Memory Bank Explorer.
-  - **Scripting API**: Sandboxed Node.js `input`, `context`, and `output` modifier hooks (`Built-in` + up to 10 reusable scripts per story).
-  - **Backups**: Export any adventure as a `.zip` archive (`Adventure` tab → `Details`).
+### 📖 Smooth, Distraction-Free Gameplay
+- **Inline Prose & Styled Actions:** Stories read like a book on a deep dark-mode canvas, with your **Do** and **Say** actions clearly highlighted.
+- **4 Ways to Steer the Story:** Switch anytime between **Do** (take an action), **Say** (speak dialogue), **Story** (write narration directly), and **Guide** (give the AI a one-turn behind-the-scenes direction).
+- **Total Turn Control:** **Undo**, **Redo**, **Continue**, **Erase**, **Retry**, and **Retry with changes** (tell the AI exactly what to tweak in its last reply).
+- **Queue Multiple Beats:** Use **`+ Add`** to stack actions or dialogue without triggering the AI yet, then press **Continue** or **Send** when you're ready.
+- **Swipe Between Retries:** Swipe sideways on mobile (or use `‹` / `›` on desktop) to flip between different versions of the latest AI response.
+- **Edit Any Turn:** Hover over a message on desktop—or tap it on mobile—to **Edit**, **Delete**, **Erase to Here**, **Change Name** (in Third Person mode), or **View Context**.
 
----
+### 🗺️ Scenarios, Choices & Characters
+- **Ready Out of the Box:** Comes with two starter worlds (*The Rusty Lantern* and *Orbital Relay 9*) in a clean **Adventures / Scenarios** home hub.
+- **Three Scenario Types:**
+  - **Story:** Classic opening prompt with fill-in-the-blank `${placeholder}` questions and optional Third Person mode.
+  - **Multiple Choice:** Multi-level branching paths where each choice can bring its own opening, lore, Story Cards, and scripts.
+  - **Character Creator:** Step-by-step hero builder—or click **Quickstart** to roll a random character and jump straight into the story.
+- **Import from AI Dungeon:** Import `.json` scenario files (`metadata.json`) or pull public scenarios directly from a `play.aidungeon.com` URL.
 
-## Requirements
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="AI RPG Harness Home hub showing Scenarios" width="800" />
+  <br />
+  <sub>The Home hub: jump into any scenario with a click, create your own, or import from AI Dungeon.</sub>
+</p>
 
-- **Python 3.10+** (uses only the Python standard library — no `pip install` needed)
-- **Node.js 18+** (used for JS scripting hooks and optional scenario URL import)
-- **An OpenAI-compatible local LLM server**, such as:
-  - [`llama.cpp`](https://github.com/ggml-org/llama.cpp) (`llama-server`)
-  - Ollama, LM Studio, or vLLM
-- *(Optional, for importing `play.aidungeon.com` URLs directly)*: Playwright + Firefox (`npm install && npx playwright install firefox`)
+### 🧠 Memory That Keeps Up With Long Stories
+- **Story Cards:** Save characters, places, factions, and items that automatically feed into the AI whenever their keywords come up (or pin key cards so they're always active). Generate card entries with AI or import/export `.json` card decks.
+- **Plot Controls:** Shape the AI with **AI Instructions**, **Plot Essentials**, **Author's Note**, and **Story Summary** (with one-click **Auto-Summarize**).
+- **Automatic Long-Term Memory:** Turn on **Auto Summarization** and the **Memory Bank** so the AI remembers important events from much earlier in your campaign.
+- **Context Viewer:** Click **Context** anytime to see exactly what the AI is reading, how much memory is used, and any warnings.
+
+### 🔌 Any AI, Any Device, Extra Add-ons
+
+<img align="right" src="docs/screenshots/gameplay-mobile.png" alt="AI RPG Harness mobile gameplay" width="240" />
+
+- **Local or Cloud AI:** Works with **llama.cpp**, **Ollama**, **LM Studio**, **vLLM**, **OpenRouter**, **OpenAI**, and other OpenAI-compatible servers. Switch endpoints or models right inside the app—no restart needed.
+- **Smart Model Adaptation:** Automatically detects your model's maximum context window and shows the right **Thinking / Reasoning** control (either a 5-step effort slider or a simple on/off toggle) when supported.
+- **One-Click Community Scripts:** Toggle **🎭 Inner Self** (NPC memory, goals, and secrets) and **✨ Auto-Cards** (automatic Story Card creation) right when starting an adventure, or write and test your own JavaScript hooks.
+- **Play on Your Phone:** Responsive mobile layout with swipe gestures and one-command [Tailscale](https://tailscale.com/) support so you can keep playing from anywhere.
+- **Instant Auto-Save & `.zip` Backups:** Every setting change saves automatically, and you can download any adventure as a `.zip` backup anytime.
+
+<br clear="right" />
 
 ---
 
 ## Installation
 
-### 1. Clone the repository
+### What You Need
+- **Python 3.10+** *(uses only Python's built-in library—nothing to `pip install`)*
+- **Node.js 18+** *(used for scenario scripts and optional URL imports)*
+- **An AI model to connect to:** a local server like [`llama.cpp`](https://github.com/ggml-org/llama.cpp) (`llama-server`), **Ollama**, **LM Studio**, or **vLLM**—or a cloud API key (such as **OpenRouter** or **OpenAI**)
+- *(Optional)* **Playwright + Firefox** — only needed if you want to import scenarios directly from `play.aidungeon.com` links
+
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/ya5h-P/AI-RPG-Harness.git
@@ -59,120 +92,179 @@ cd AI-RPG-Harness
 chmod +x start.sh
 ```
 
-### 2. Optional: Enable `play.aidungeon.com` URL imports
+### 2. *(Optional)* Enable AI Dungeon URL Imports
 
-If you only write scenarios locally or import `.json` files, you can skip this step. To import public scenarios directly by URL:
+Skip this if you only create your own scenarios or import `.json` files:
 
 ```bash
 npm install
 npx playwright install firefox
 ```
 
-### 3. Start an OpenAI-compatible LLM server
+### 3. Start Your Local AI *(or Skip for Cloud APIs)*
 
-Start your local model server (default expected address: `http://127.0.0.1:8080`). Example with `llama.cpp`:
+If you're running a local model, start your server first (AI RPG Harness checks `http://127.0.0.1:8080` by default). For example, with `llama.cpp`:
 
 ```bash
-llama-server -m /path/to/model.gguf --port 8080 -c 32768
+llama-server -m /path/to/your-model.gguf --port 8080 -c 32768
 ```
 
-*(If you use Ollama on `:11434` or LM Studio on `:1234`, set `LLM_URL` when starting—see Configuration below.)*
+### 4. Start the App
 
----
-
-## Running the App
-
-### Desktop (Local Only)
+**On your computer:**
 
 ```bash
 ./start.sh
 ```
 
-Open **http://127.0.0.1:7860** in your browser. Look for the green dot in the top-left corner—hovering it shows the connected model name.
+Open **http://127.0.0.1:7860** in your browser.
 
-### Play from Your Phone (Tailscale)
+**To play from your phone over Tailscale:**
 
-Make sure [Tailscale](https://tailscale.com/) is connected on both your host machine and phone, then run:
+Make sure [Tailscale](https://tailscale.com/) is connected on both your computer and your phone, then run:
 
 ```bash
 ./start.sh --tailscale
 ```
 
-`start.sh` prints your Tailscale IP URL (for example `http://100.x.y.z:7860`) and MagicDNS URL (`http://<hostname>.ts.net:7860`). Open either URL on your phone browser.
+`start.sh` prints your Tailscale IP URL (e.g. `http://100.x.y.z:7860`) and MagicDNS URL (`http://<hostname>.ts.net:7860`). Open either link on your phone.
 
-### Background Management Commands
+### Everyday Commands
 
 ```bash
-./start.sh --bg --tailscale   # Run detached in background (writes logs/server.log)
-./start.sh status             # Show LLM server, Web UI health, and phone URL
-./start.sh stop               # Stop background Web UI server
-./start.sh test               # Run the full automated unit test suite
-./start.sh --help             # Show CLI options and environment variables
+./start.sh --bg --tailscale   # Run in the background (logs to logs/server.log)
+./start.sh status             # Check AI server & Web UI health + show phone URL
+./start.sh stop               # Stop the background server
+./start.sh test               # Run the automated test suite
+./start.sh --help             # Show all options
 ```
 
 ---
 
-## Usage Guide
+## How to Play
 
-### 1. Starting & Playing an Adventure
+### 1. Connect Your AI Model
+On the Home screen, look at the button in the **top-right corner**—a **green dot** with your model's name means you're ready to play.
 
-- **Home Screen**: Switch between **Adventures** (saved stories) and **Scenarios** (starter templates, custom scenarios, or imported scenarios).
-- **Modes** (tap/click the mode pill at bottom-left to expand `← Do | Say | Story | Guide`):
-  - **Do** (`Alt+1`): Character actions, automatically formatted (`you` → `You <action>.`, or Third Person `<Name> <action>.`) and marked with `>` in AI context.
-  - **Say** (`Alt+2`): Character dialogue (`You say, "<dialogue>"`).
-  - **Story** (`Alt+3`): Direct inline narrative text without action formatting.
-  - **Guide** (`Alt+4`): Temporary out-of-character GM instruction for the next AI turn only.
-- **Send vs `+ Add`**:
-  - **Send** adds your input and immediately streams the AI response (`Enter` sends; `Shift+Enter` inserts a newline).
-  - **`+ Add`** appends your formatted turn to the feed *without* triggering generation yet so you can stack multiple beats before pressing **▶ Continue** or **Send**.
-- **Top-Right Controls**: `↶ Undo`, `↷ Redo`, `🔍 Context` (inspect prompt tokens & warnings), and `⚙ Settings`.
+To connect to Ollama, LM Studio, or a cloud provider:
+1. Click the **Model** button in the top-right corner of the Home screen *(or click the status dot in the top-left during an adventure)*.
+2. Enter your **Base URI**:
+   - **llama.cpp:** `http://127.0.0.1:8080`
+   - **Ollama:** `http://127.0.0.1:11434/v1`
+   - **LM Studio:** `http://127.0.0.1:1234/v1`
+   - **OpenRouter:** `https://openrouter.ai/api/v1`
+   - **OpenAI:** `https://api.openai.com/v1`
+3. Add your **API Key** if required, click **↻ Fetch** to choose a model, and click **Save & Connect**.
 
-### 2. Mobile Controls & Gestures
+### 2. Start an Adventure
+- Switch between **Adventures** (saved stories) and **Scenarios** (starter worlds, custom scenarios, or imported scenarios).
+- Click any scenario card to start playing—or use **+ Create Scenario** and **📥 Import** in the top-right.
+- On the setup screen, you can also toggle **🎭 Inner Self** and **✨ Auto-Cards** on with a single click before starting.
 
-- **Tap any message** in the story feed to open its inline toolbar (`Edit`, `Delete`, `Erase to Here`, `View Context`, `Change Name`); tap again or tap outside to close. *(On desktop, hover over any message instead.)*
-- **Swipe sideways** on the latest AI response when multiple Retry generations exist to glide smoothly between variants.
+### 3. Take Turns & Steer the Story
+Click the mode pill at the bottom-left (or use keyboard shortcuts) to choose how your turn is sent:
 
-### 3. Settings (`Adventure` & `AI Settings`)
+| Mode | Shortcut | What It Does |
+| :--- | :---: | :--- |
+| ⚡ **Do** | `Alt+1` | Take an action (auto-formatted like `You warm your hands by the hearth.`). |
+| 💬 **Say** | `Alt+2` | Speak dialogue (auto-formatted like `You say, "Who goes there?"`). |
+| 📖 **Story** | `Alt+3` | Write narrative text directly into the story without action formatting. |
+| 🧭 **Guide** | `Alt+4` | Send a temporary out-of-character instruction for the next AI turn only. |
 
-Click **`⚙ Settings`** in the top-right during any adventure:
+- **Send** (`Enter`) adds your turn and streams the AI's response (`Shift+Enter` adds a new line).
+- **`+ Add`** appends your turn without triggering the AI yet, so you can stack multiple beats before pressing **▶ Continue** or **Send**.
 
-- **Adventure Tab**:
-  - **Plot**: `AI Instructions`, `Story Summary` (with manual `✨ Auto-Summarize`), `Plot Essentials`, `Author's Note`, and `Third Person` toggle/name.
-  - **Cards**: Create, search, filter, pin, AI-generate entries, or import/export AI Dungeon Story Card `.json` files.
-  - **Scripts**: Toggle built-in JS hooks or attach up to 10 reusable scripts with a live test runner & console log.
-  - **Details**: Edit title/description/tags and download a full `.zip` backup.
-- **AI Settings Tab**:
-  - Tune **Model Settings** (`Context Length`, `Response Length`, `Temperature`, `Top P`, `Top K`, `Repetition / Presence / Frequency Penalty`) and **Memory & Output** (`Auto Summarization`, `Memory Bank`, `Raw Model Output`, `Follow latest text`, `Enable Gemma Thinking Mode`).
-  - Changes inside `AI Settings` **auto-save immediately** to the active story *and* persist globally to `settings.json` for all future adventures.
-
-### 4. Switching Models & Providers (Local or Cloud)
-
-Click **`🔌 Model`** in the **top-right of the Home page** (or click the status dot anytime) to switch between any local or OpenAI-compatible remote endpoint without restarting:
-
-- **Base URI**: e.g., `http://127.0.0.1:8080` (`llama-server`), `http://127.0.0.1:11434/v1` (Ollama), `http://127.0.0.1:1234/v1` (LM Studio), `https://openrouter.ai/api/v1`, or `https://api.openai.com/v1`
-- **API Key**: Optional (`Authorization: Bearer ...` header); masked on read and saved locally in `settings.json`
-- **Model Name**: Automatically populated if the server offers 1 model, or selectable via `↻ Fetch` when multiple models are available
+### 4. Edit, Retry & Customize
+- **Quick bar:** Use **↻ Retry**, **✏️ Retry with changes**, **▶ Continue**, and **⌫ Erase** above the input box, plus **↶ Undo** and **↷ Redo** in the top bar.
+- **Per-message actions:** Hover on desktop or tap on mobile to **Edit**, **Delete**, **Erase to Here**, **Change Name**, or **View Context**.
+- **⚙ Settings (auto-saved):**
+  - **Adventure tab:** Manage **Plot** (*AI Instructions*, *Story Summary* + *Auto-Summarize*, *Plot Essentials*, *Author's Note*, *Third Person*), **Cards**, **Scripts** (built-in, reusable, and community scripts + console log), and **Details** (title, description, tags, and **`.zip` backup**).
+  - **AI Settings tab:** Tune **Context Length** (slider + number input), **Response Length**, **Temperature**, **Top P / Top K**, penalties, **Auto Summarization**, **Memory Bank**, **Raw Model Output**, **Follow latest text**, and model-aware **Thinking / Reasoning** controls. Changes save immediately and carry over as defaults for future adventures.
 
 ---
 
-## Configuration (Environment Variables)
+## Technical Information
+
+### Architecture
+
+| Component | Files | Implementation Details |
+| :--- | :--- | :--- |
+| **HTTP & SSE Server** | `server.py` | Python 3.10+ stdlib `ThreadingHTTPServer`, per-story `threading.Lock` synchronization, Server-Sent Events (SSE) streaming proxy, `30s` idle socket timeout, graceful client-disconnect handling. |
+| **Core Engine** | `harness.py` | Dataclass models (`Story`, `Scenario`, `StoryCard`, `MemoryItem`, `Script`, `Segment`), recursive Multiple Choice inheritance (up to depth 12), `${placeholder}` substitution, context planner, TF-IDF Memory Bank, and atomic JSON writes (`.tmp` + `os.replace`). |
+| **JS Script Sandbox** | `script_runner.py` | Isolated Node.js `vm` execution per hook (`library`, `input`, `context`, `output`) with timeouts (`2.5s` library, `3.0s` hook, `6.0s` subprocess). Exposes AI Dungeon-compatible `state`, `info`, `history`, `storyCards` / `worldInfo`, `quests`, and card CRUD helpers. |
+| **URL Importer** | `aidungeon_importer.mjs` | Optional Playwright (headless Firefox) GraphQL response interceptor for `play.aidungeon.com`, with recursive option-tree hydration (up to depth 4, max 30 fetches). |
+| **Web Frontend** | `static/index.html`, `static/style.css`, `static/app.js` | Zero-build vanilla HTML/CSS/JS SPA with SSE streaming, touch swipe carousel for retry variants, and debounced auto-save settings. |
+
+### Context Budgeting & Memory Pipeline
+
+`build_context_plan()` in `harness.py` assembles prompts using a Required vs. Dynamic token budget (default context length: `16,384` tokens, clamped to the active model's detected limit):
+
+1. **Required Context (capped at 70% of effective context limit):** Allocated in priority order—`Front Memory` and `Last Action` are never truncated, followed by `Author's Note` → `Plot Essentials` → `AI Instructions` → `Story Summary`.
+2. **Dynamic Context (remaining budget):**
+   - **Story Cards (~25%):** Pinned cards first, then keyword-matched cards scanned across recent segments and ranked by recency and hit count.
+   - **Memory Bank (~25%, when enabled):** Ranked against the last 3 segments via TF-IDF cosine similarity.
+   - **Story History (~50%, or ~75% without Memory Bank):** Packed newest-first while always retaining the latest segment.
+3. **Background Memory Maintenance (`_run_memory_maintenance`):**
+   - **Memory Bank:** Once `>= 12` unsummarized segments accumulate, compresses the oldest 6-segment window into a 1–3 sentence memory via a one-shot LLM call.
+   - **Auto Summarization:** Updates the rolling 3–5 sentence Story Summary every 15 segments, preserving manual edits.
+4. **Tokenization & Output Cleanup:** Queries `llama.cpp` `/tokenize` for exact counts when available (falling back to `~4 chars/token`). Unless **Raw Model Output** is enabled, trims incomplete trailing sentences on `finish_reason == "length"` and strips repeated leading sentences or suffix-prefix dialogue overlaps (recorded under `Removed Context` in the Context Viewer).
+
+### Provider, Context & Reasoning Detection
+
+- **Endpoint Compatibility:** Supports `auto`, `llama_cpp`, and `openai_compat` provider routing, normalized `/v1` path joining, and optional `Authorization: Bearer` headers (masked on read in UI responses).
+- **Context Limit Probing:** Queries `llama.cpp` `/props` & `/slots` (`n_ctx`) or parses `/v1/models` metadata (`context_length`, `max_model_len`, `max_context_length`, `input_token_limit`, `context_window`).
+- **Thinking / Reasoning Classification:** Automatically classifies the active model as:
+  - `effort` — stepped `reasoning_effort` (`off`, `low`, `medium`, `high`, `xhigh`) via `/props` `supports_reasoning_effort`, `/v1/models` `supported_parameters`, or model family detection (e.g., `gpt-5`, `o1`/`o3`/`o4`, `claude-3.7`/`4`, `gemini-2.5`/`3`/`4`, `grok-4`).
+  - `toggle` — boolean `chat_template_kwargs.enable_thinking` (e.g., `gemma-4`, `qwen3`, `deepseek-r1`, `glm-4`).
+  - `none` — hides thinking controls when unsupported.
+
+<details>
+<summary><strong>Environment Variables</strong></summary>
 
 | Variable | Default | Description |
-|---|---|---|
+| :--- | :--- | :--- |
 | `PORT` | `7860` | Web UI HTTP port |
 | `HOST` | `127.0.0.1` | Bind host (`0.0.0.0` for LAN, or pass `--tailscale`) |
 | `LLM_URL` | `http://127.0.0.1:8080` | Default Base URI of your OpenAI-compatible LLM server |
-| `LLM_API_KEY` | *(optional)* | Default Bearer API key for remote OpenAI-compatible providers |
-| `LLM_MODEL` | *(auto)* | Default model name override |
-| `LLM_PORT` | `8080` | Port checked by `start.sh` when using default `LLM_URL` |
-| `LLAMA_SERVE_SCRIPT` | *(optional)* | Path to a local bash script launched when clicking `Start LLM` in the Web UI |
-| `TAILSCALE` | `0` | Set to `1` to bind Tailscale IP automatically |
+| `LLM_API_KEY` | *(optional)* | Default Bearer API key for remote providers |
+| `LLM_MODEL` | *(auto)* | Default model ID override |
+| `LLM_PORT` | `8080` | Port checked by `start.sh status` when using default `LLM_URL` |
+| `LLAMA_SERVE_SCRIPT` | *(optional)* | Path to a local bash script launched by the Web UI's `Start LLM` button |
+| `TAILSCALE` | `0` | Set to `1` / `true` to bind your Tailscale IPv4 address automatically |
 
----
+</details>
 
-## Running Tests
+<details>
+<summary><strong>Project Structure & Local Data</strong></summary>
 
-No live LLM server is required; the suite uses local mock HTTP servers in isolated temporary directories:
+```text
+.
+├── server.py                # Stdlib HTTP/SSE server, REST API & OpenAI-compatible LLM proxy
+├── harness.py               # Data models, choice inheritance, context planner, memory & dedup
+├── script_runner.py         # Node.js vm runner for AI Dungeon-compatible JS hooks
+├── aidungeon_importer.mjs   # Optional Playwright scraper for play.aidungeon.com scenarios
+├── start.sh                 # Launcher, Tailscale binding, background control, status & test runner
+├── test_harness.py          # Automated unit & API test suite
+├── package.json             # Optional Playwright dependency manifest
+├── scenarios/               # Starter scenarios (tavern.json, station.json) & user scenarios
+├── docs/screenshots/        # README UI screenshots
+└── static/
+    ├── index.html           # Single-page app shell, drawers & modals
+    ├── style.css            # Deep dark-mode desktop & mobile styling
+    └── app.js               # Client state, SSE streaming, swipe carousel & auto-save editors
+```
+
+**Runtime files created locally (gitignored):**
+- `stories/` — Saved adventures (segments, retry variants, undo/redo stacks, memories, script state)
+- `scripts/` — Reusable scripts and cached community scripts (`Inner Self`, `Auto-Cards`)
+- `settings.json` — Persisted global AI settings and active endpoint configuration
+- `logs/` — Background server logs (`server.log`, `llama-server.log`)
+
+</details>
+
+### Running Tests
+
+No live LLM server is required—the suite uses local mock HTTP servers in isolated temporary directories:
 
 ```bash
 ./start.sh test
@@ -180,24 +272,9 @@ No live LLM server is required; the suite uses local mock HTTP servers in isolat
 python3 -m unittest -v test_harness.py
 ```
 
----
-
-## Project Structure
-
-```text
-.
-├── server.py                # Stdlib HTTP/SSE server & OpenAI-compatible LLM proxy
-├── harness.py               # Data models, scenario/choice inheritance, context planner, memory & dedup
-├── script_runner.py         # Sandboxed Node.js modifier runner (input / context / output hooks)
-├── aidungeon_importer.mjs   # Optional Playwright scraper for play.aidungeon.com scenarios
-├── start.sh                 # Launcher, Tailscale binding, background control, status & test runner
-├── test_harness.py          # Automated unit & API test suite
-├── package.json             # Optional Playwright dependency manifest
-└── static/
-    ├── index.html           # Single-page app shell & modals
-    ├── style.css            # Responsive desktop & mobile styling
-    └── app.js               # Client state, SSE streaming, swipe carousel & editors
-```
+### Security & Trust Model
+- No authentication or TLS is built into `server.py`; bind only to `127.0.0.1` or a private overlay network such as Tailscale.
+- Node.js's `vm` module isolates script state for convenience, not as a hardened security boundary against untrusted JavaScript. Only run scripts from sources you trust.
 
 ---
 
