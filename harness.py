@@ -1515,12 +1515,30 @@ def build_context_plan(
 
     pending_user_blocks: list[str] = []
 
-    def format_pending(blocks: list[str], had_opening: bool, only_story: bool) -> str:
+    def format_pending(
+        blocks: list[str],
+        had_opening: bool,
+        only_story: bool,
+        is_final_turn: bool = False,
+    ) -> str:
         joined = "\n\n".join(blocks)
         if had_opening and len(blocks) == 1:
             return f"Opening scene:\n{joined}\n\nContinue the story seamlessly from here."
         if only_story:
+            if is_final_turn:
+                return (
+                    f"{joined}\n\n"
+                    "[Continue the narrative seamlessly right from the end of this text "
+                    "without backtracking, repeating, or rewriting it.]"
+                )
             return f"{joined}\n\nContinue the narrative seamlessly from this point."
+        if is_final_turn:
+            return (
+                f"{joined}\n\n"
+                "[Continue immediately after the player's action/dialogue above. "
+                "It has already happened—do NOT backtrack to set it up or repeat/rephrase "
+                "what the player just said or did. Start directly with the immediate reaction.]"
+            )
         return joined
 
     pending_has_opening = False
@@ -1563,7 +1581,10 @@ def build_context_plan(
         messages.append({
             "role": "user",
             "content": format_pending(
-                pending_user_blocks, pending_has_opening, pending_only_story
+                pending_user_blocks,
+                pending_has_opening,
+                pending_only_story,
+                is_final_turn=True,
             ),
         })
     elif messages[-1]["role"] != "user":

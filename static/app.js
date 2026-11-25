@@ -1,4 +1,20 @@
 (() => {
+  // Prevent iOS Safari / WKWebView pinch-to-zoom and multi-touch gestures (capture phase)
+  ["gesturestart", "gesturechange", "gestureend"].forEach((evt) => {
+    window.addEventListener(evt, (e) => e.preventDefault(), { passive: false, capture: true });
+  });
+  ["touchstart", "touchmove"].forEach((evt) => {
+    document.addEventListener(
+      evt,
+      (e) => {
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      },
+      { passive: false, capture: true }
+    );
+  });
+
   const state = {
     stories: [],
     scenarios: [],

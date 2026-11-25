@@ -37,6 +37,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
+  touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
 .hidden {
@@ -49,6 +51,7 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  touch-action: manipulation;
 }
 
 /* Topbar */

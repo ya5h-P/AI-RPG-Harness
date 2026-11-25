@@ -1899,6 +1899,33 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(server._infer_thinking_mode_from_model("muse-12b"), "none")
 
+    def test_final_say_turn_has_immediate_continuation_directive(self):
+        story = harness.Story(
+            id="test-say-cont",
+            title="Say Turn Continuation",
+            segments=[
+                harness.Segment(id="open-1", kind="opening", text="Rain falls outside."),
+                harness.Segment(id="ai-1", kind="ai", text="You walk toward the door together."),
+                harness.Segment(id="say-1", kind="say", text='You say, "Can I drive today?"'),
+            ],
+        )
+        msgs = harness.build_chat_messages(story)
+        last_user = msgs[-1]["content"]
+        self.assertIn('You say, "Can I drive today?"', last_user)
+        self.assertIn("Continue immediately after the player's action/dialogue above", last_user)
+        # Earlier turns in history should stay clean without the final-turn directive
+        story.segments.append(
+            harness.Segment(id="ai-2", kind="ai", text='She nods. "Sure."')
+        )
+        story.segments.append(
+            harness.Segment(id="do-1", kind="do", text="You unlock the car.")
+        )
+        msgs2 = harness.build_chat_messages(story)
+        prior_say_user = msgs2[-3]["content"]
+        self.assertIn('You say, "Can I drive today?"', prior_say_user)
+        self.assertNotIn("Continue immediately after the player's action/dialogue above", prior_say_user)
+        self.assertIn("Continue immediately after the player's action/dialogue above", msgs2[-1]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()
