@@ -682,6 +682,7 @@ class Story:
     builtin_script: dict[str, Any] = field(default_factory=_default_builtin_script)
     attached_scripts: list[dict[str, Any]] = field(default_factory=list)
     script_state: dict[str, Any] = field(default_factory=dict)
+    dismissed_script_message: str | None = None
     quests: list[dict[str, Any]] = field(default_factory=list)
     script_logs: list[str] = field(default_factory=list)
     segments: list[Segment] = field(default_factory=list)
@@ -713,6 +714,7 @@ class Story:
             "builtin_script": self.builtin_script,
             "attached_scripts": self.attached_scripts,
             "script_state": self.script_state,
+            "dismissed_script_message": self.dismissed_script_message,
             "quests": self.quests,
             "script_logs": self.script_logs,
             "segments": [asdict(seg) for seg in self.segments],
@@ -752,6 +754,11 @@ class Story:
             builtin_script=_normalize_builtin_script(data.get("builtin_script")),
             attached_scripts=_normalize_attached_scripts(data.get("attached_scripts")),
             script_state=dict(data.get("script_state") or {}),
+            dismissed_script_message=(
+                str(data["dismissed_script_message"])
+                if data.get("dismissed_script_message") is not None
+                else None
+            ),
             quests=list(data.get("quests") or []),
             script_logs=list(data.get("script_logs") or [])[-60:],
             segments=[Segment.from_dict(s) for s in data.get("segments", [])],

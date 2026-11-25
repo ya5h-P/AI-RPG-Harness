@@ -1671,6 +1671,21 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(s2["story_cards"][1]["entry"], "Aldric is a stern blacksmith.")
             self.assertEqual(s2["story_cards"][1]["description"], "Auto-generated")
             self.assertEqual(s2["segments"][-1]["text"], "HIJACK_CARD trigger")
+
+            # Turn 3: normal turn marks previous turn's state.message dismissed
+            # while keeping script_state['message'] intact for Auto-Cards parity
+            req3 = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/api/stories/{story_id}/generate",
+                data=json.dumps({"mode": "do", "text": "look around quietly"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req3, timeout=5) as resp:
+                resp.read()
+            _, st3 = self._req("GET", f"/api/stories/{story_id}")
+            s3 = st3["story"]
+            self.assertEqual(s3["script_state"]["message"], "Auto-Cards created Aldric!")
+            self.assertEqual(s3["dismissed_script_message"], "Auto-Cards created Aldric!")
         finally:
             server.LLM_URL = orig_llm_url
             mock_llm.shutdown()

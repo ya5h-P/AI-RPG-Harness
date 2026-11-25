@@ -1094,6 +1094,20 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
 
         self._send_json(200, {"story_summary": summary, "story": latest.to_dict()})
 
+    def _dismiss_prior_script_message(self, story: Story) -> None:
+        """Mark prior turn's state.message dismissed without deleting it from script_state.
+
+        Community scripts such as Auto-Cards compare state.message against their
+        own previous value across turns, so keeping script_state['message'] intact
+        while recording the dismissed text prevents stale banners from reappearing.
+        """
+        msg = (
+            story.script_state.get("message")
+            if isinstance(story.script_state, dict)
+            else None
+        )
+        story.dismissed_script_message = str(msg) if msg else None
+
     def _handle_append(self, story_id: str, body: dict[str, Any]) -> None:
         mode = str(body.get("mode") or "")
         raw_text = str(body.get("text") or "")
@@ -1109,6 +1123,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             if story is None:
                 self._send_error_json(404, "Story not found")
                 return
+            self._dismiss_prior_script_message(story)
             formatted = format_player_text(
                 mode,
                 raw_text,
@@ -1252,6 +1267,7 @@ class RPGRequestHandler(BaseHTTPRequestHandler):
             if story is None:
                 self._send_error_json(404, "Story not found")
                 return
+            self._dismiss_prior_script_message(story)
 
             user_seg: Segment | None = None
             input_stopped = False

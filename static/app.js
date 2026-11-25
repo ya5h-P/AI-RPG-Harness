@@ -356,17 +356,13 @@
     const prevText = String(prevSeg.text || "").trimEnd();
     const nextText = String(nextSeg.text || "").trimStart();
     if (!prevText || !nextText) return "";
-    if (nextSeg.kind === "do" || nextSeg.kind === "say") {
+    if (
+      prevSeg.kind === "do" ||
+      prevSeg.kind === "say" ||
+      nextSeg.kind === "do" ||
+      nextSeg.kind === "say"
+    ) {
       return "\n\n";
-    }
-    if (prevSeg.kind === "say" && nextSeg.kind === "ai") {
-      if (nextText.startsWith('"') || nextText.startsWith("\u201c")) {
-        return "\n\n";
-      }
-      return " ";
-    }
-    if (prevSeg.kind === "do" && (nextSeg.kind === "ai" || nextSeg.kind === "story")) {
-      return ',.;:!?")\u201d\u2019]'.includes(nextText[0]) ? "" : " ";
     }
     if (prevSeg.kind === "story" && (nextSeg.kind === "ai" || nextSeg.kind === "story")) {
       if (!prevText.includes("\n")) {
@@ -613,7 +609,8 @@
 
   function renderScriptMessageBanner() {
     const msg = state.currentStory?.script_state?.message;
-    if (msg && String(msg).trim()) {
+    const dismissed = state.currentStory?.dismissed_script_message;
+    if (msg && String(msg).trim() && String(msg) !== String(dismissed || "")) {
       els.scriptMessageBanner.textContent = String(msg);
       els.scriptMessageBanner.classList.remove("hidden");
     } else {
@@ -1068,6 +1065,47 @@
         continue;
       }
 
+      const bindSegmentToolbarClick = (el, shouldIgnore = null) => {
+        el.addEventListener("click", (e) => {
+          if (
+            (shouldIgnore && shouldIgnore()) ||
+            state.isGenerating ||
+            e.target.closest(".segment-edit-box") ||
+            window.getSelection()?.toString()
+          ) {
+            return;
+          }
+          state.activeToolbarSegmentId =
+            state.activeToolbarSegmentId === seg.id ? null : seg.id;
+          feed.querySelectorAll(".segment").forEach((node) => {
+            node.classList.toggle(
+              "toolbar-open",
+              node.dataset.segId === state.activeToolbarSegmentId
+            );
+          });
+          renderSegmentActionBar();
+        });
+      };
+
+      if (seg.kind === "do" || seg.kind === "say") {
+        activeProseRun = null;
+        prevInlineSeg = null;
+        const el = document.createElement("div");
+        el.className =
+          `segment segment-action kind-${seg.kind}` +
+          (state.activeToolbarSegmentId === seg.id ? " toolbar-open" : "");
+        el.dataset.segId = seg.id;
+
+        const textSpan = document.createElement("span");
+        textSpan.className = "segment-text";
+        textSpan.textContent = seg.text;
+
+        el.appendChild(textSpan);
+        bindSegmentToolbarClick(el);
+        feed.appendChild(el);
+        continue;
+      }
+
       const el = document.createElement("span");
       el.className =
         `segment segment-inline kind-${seg.kind}` +
@@ -1142,25 +1180,7 @@
         el.addEventListener("touchcancel", () => finishDrag(false), { passive: true });
       }
 
-      el.addEventListener("click", (e) => {
-        if (
-          justSwiped ||
-          state.isGenerating ||
-          e.target.closest(".segment-edit-box") ||
-          window.getSelection()?.toString()
-        ) {
-          return;
-        }
-        state.activeToolbarSegmentId =
-          state.activeToolbarSegmentId === seg.id ? null : seg.id;
-        feed.querySelectorAll(".segment").forEach((node) => {
-          node.classList.toggle(
-            "toolbar-open",
-            node.dataset.segId === state.activeToolbarSegmentId
-          );
-        });
-        renderSegmentActionBar();
-      });
+      bindSegmentToolbarClick(el, () => justSwiped);
 
       if (!activeProseRun) {
         activeProseRun = document.createElement("div");
@@ -2457,6 +2477,12 @@
   async function streamGenerate({ mode = null, text = "", retry = false, retryInstructions = "" } = {}) {
     if (!state.currentStory || state.isGenerating) return;
     showError("");
+    if (state.currentStory.script_state?.message) {
+      state.currentStory.dismissed_script_message = String(
+        state.currentStory.script_state.message
+      );
+      renderScriptMessageBanner();
+    }
 
     state.isGenerating = true;
     state.abortController = new AbortController();
@@ -2638,6 +2664,7 @@
       els.storyFeed.removeEventListener("scroll", onFeedScroll);
       state.isGenerating = false;
       state.abortController = null;
+      renderScriptMessageBanner();
       renderStoryFeed();
       if (isContinuingInline) {
         if (!userScrolledAway && state.currentStory?.settings?.follow_latest_text !== false) {
